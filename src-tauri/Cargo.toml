@@ -1,0 +1,22 @@
+[package]
+name = "arxburn-gui"
+version = "0.1.0"
+edition = "2021"
+description = "arxburn GUI: write an image to a USB stick, and watch every byte land"
+authors = ["0xb0rn3"]
+build = "build.rs"
+
+# The GUI is a separate crate on purpose. The CLI it drives stays dependency free, because that
+# is what makes it usable on a machine with nothing installed; the window around it does not
+# have to be. Same split as arxctl and droidB.
+[[bin]]
+name = "arxburn-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

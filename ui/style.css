@@ -1,0 +1,103 @@
+/* ArxOS house palette: gold on near black, Playfair for the name, mono for anything that is
+   data. Kept deliberately still: no motion, because this window is watched while something
+   irreversible happens and movement for its own sake reads as noise. */
+:root {
+  --bg: #0a0a0c;
+  --panel: #131317;
+  --line: #24242b;
+  --ink: #f2f2f4;
+  --dim: #8b8b96;
+  --gold: #e8702a;
+  --green: #3ec16a;
+  --red: #e2523f;
+  --yellow: #e0b341;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 "Inter", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono, .list .meta, .numbers { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.mark { display: flex; align-items: center; gap: 12px; }
+.glyph { color: var(--gold); font-size: 26px; line-height: 1; }
+h1 {
+  margin: 0; font: italic 600 24px/1 "Playfair Display", "Bodoni Moda", Georgia, serif;
+  letter-spacing: .2px;
+}
+header p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
+nav { display: flex; gap: 6px; }
+.tab {
+  background: transparent; border: 1px solid transparent; color: var(--dim);
+  padding: 7px 14px; border-radius: 7px; cursor: pointer; font-size: 13px;
+}
+.tab.active { color: var(--ink); border-color: var(--line); background: #191920; }
+
+main { padding: 22px; }
+.panel { display: none; }
+.panel.active { display: block; }
+h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim); font-weight: 600; }
+
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.col { min-width: 0; }
+
+.field { margin-bottom: 10px; }
+.field.row { display: flex; gap: 10px; }
+input[type=text], select {
+  width: 100%; padding: 10px 12px; background: #0f0f13; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; font-size: 13px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+select { appearance: none; width: auto; min-width: 160px; }
+input:focus, select:focus { outline: none; border-color: var(--gold); }
+
+.list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.list.wide { max-height: none; }
+.list li {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  margin-bottom: 7px; background: var(--panel); cursor: pointer;
+}
+.list li.picked { border-color: var(--gold); background: #1b160f; }
+.list li.refused { opacity: .55; cursor: not-allowed; }
+.list .name { font-weight: 500; }
+.list .meta { color: var(--dim); font-size: 12px; }
+.list .why { color: var(--red); font-size: 12px; }
+.list .ok { color: var(--green); font-size: 12px; }
+.list .warn { color: var(--yellow); font-size: 12px; }
+.list .sys { color: var(--red); font-weight: 600; font-size: 11px; letter-spacing: .06em; }
+
+.go { display: flex; align-items: center; justify-content: space-between; margin: 20px 0 8px; }
+.check { color: var(--dim); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+button {
+  background: var(--gold); border: none; color: #17100a; font-weight: 600;
+  padding: 11px 22px; border-radius: 8px; cursor: pointer; font-size: 14px;
+}
+button:disabled { background: #2a2a31; color: #6a6a74; cursor: not-allowed; }
+button.ghost { background: transparent; border: 1px solid var(--line); color: var(--dim); font-weight: 500; padding: 8px 14px; }
+button.ghost.danger { border-color: #45272a; color: var(--red); }
+button.small { padding: 6px 12px; font-size: 12px; }
+
+.progress { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.progress.hidden { display: none; }
+.bar { height: 10px; background: #0f0f13; border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
+#bar-fill { height: 100%; width: 0; background: var(--gold); }
+.numbers { display: flex; gap: 18px; margin-top: 10px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+#phase { color: var(--ink); }
+
+.log { list-style: none; margin: 14px 0 0; padding: 0; font-size: 12.5px; }
+.log li { padding: 5px 0; border-bottom: 1px solid #1a1a20; color: var(--dim); }
+.log li.ok { color: var(--green); }
+.log li.err { color: var(--red); }
+.log li.step { color: var(--ink); }
+.log li .mono { color: var(--dim); }

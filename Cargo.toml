@@ -6,6 +6,12 @@ description = "Write an image to a USB stick, and prove the stick got it"
 license = "MIT"
 repository = "https://github.com/0xb0rn3/arxburn"
 
+# The GUI lives in src-tauri as a separate crate, so the CLI below keeps its empty dependency
+# list while the window around it can use Tauri. Same split as arxctl and droidB.
+[workspace]
+resolver = "2"
+members = ["src-tauri"]
+
 # No dependencies, deliberately. A burn tool is what you reach for on a machine that has just been
 # installed or is refusing to boot, so it has to build and run with nothing but std.
 

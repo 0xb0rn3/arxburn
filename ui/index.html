@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>arxburn</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <div class="mark">
+    <span class="glyph">&#9679;</span>
+    <div>
+      <h1>arxburn</h1>
+      <p id="version">reading the engine…</p>
+    </div>
+  </div>
+  <nav>
+    <button class="tab active" data-tab="burn">Burn</button>
+    <button class="tab" data-tab="images">Images</button>
+  </nav>
+</header>
+
+<main>
+  <section id="burn" class="panel active">
+    <div class="cols">
+      <div class="col">
+        <h2>1. The image</h2>
+        <div class="field">
+          <input id="image-path" type="text" spellcheck="false"
+                 placeholder="/home/you/Downloads/arxos-0.0.1.iso" />
+        </div>
+        <ul id="local-list" class="list"></ul>
+      </div>
+
+      <div class="col">
+        <h2>2. The disk</h2>
+        <ul id="device-list" class="list"></ul>
+        <button id="refresh" class="ghost">Look again</button>
+      </div>
+    </div>
+
+    <div class="go">
+      <label class="check"><input id="verify" type="checkbox" checked /> read it back afterwards and check every byte</label>
+      <button id="burn-btn" disabled>Write it</button>
+    </div>
+
+    <div id="progress" class="progress hidden">
+      <div class="bar"><div id="bar-fill"></div></div>
+      <div class="numbers">
+        <span id="phase">working</span>
+        <span id="bytes" class="mono">0</span>
+        <span id="rate" class="mono"></span>
+        <span id="eta" class="mono"></span>
+      </div>
+      <button id="cancel" class="ghost danger">Stop</button>
+    </div>
+
+    <ul id="log" class="log"></ul>
+  </section>
+
+  <section id="images" class="panel">
+    <div class="field row">
+      <input id="search" type="text" placeholder="search: arch, kali, windows, rescue…" />
+      <select id="family">
+        <option value="">everything</option>
+        <option value="linux">linux</option>
+        <option value="windows">windows</option>
+        <option value="tool">rescue and tools</option>
+      </select>
+    </div>
+    <ul id="image-list" class="list wide"></ul>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
