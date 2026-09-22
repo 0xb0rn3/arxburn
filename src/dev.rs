@@ -39,20 +39,60 @@ fn read_trim(p: &Path) -> Option<String> {
     fs::read_to_string(p).ok().map(|s| s.trim().to_string())
 }
 
-/// major:minor of the device behind "/", from mountinfo. A partition's parent disk is what a
-/// burn would destroy, so the check has to climb from the partition to its disk.
-fn root_dev_numbers() -> Option<(u32, u32)> {
-    let mi = fs::read_to_string("/proc/self/mountinfo").ok()?;
-    for line in mi.lines() {
+/// The mounts the running system cannot survive losing.
+const CRITICAL: [&str; 5] = ["/", "/boot", "/boot/efi", "/usr", "/var"];
+
+/// Pull both identifications of the critical mounts out of mountinfo: the major:minor the kernel
+/// reports, and the device path it was mounted from.
+///
+/// Both are needed. btrfs, ZFS and any filesystem on an anonymous block device report something
+/// like 0:35 for "/", which matches no disk in /sys, so a check on numbers alone quietly decides
+/// the system disk is an ordinary target. That is the one mistake this tool must never make, so
+/// the mount SOURCE (/dev/nvme0n1p2) is read as well and resolved back to its disk.
+fn critical_sources(mountinfo: &str) -> (Vec<(u32, u32)>, Vec<String>) {
+    let (mut nums, mut srcs) = (Vec::new(), Vec::new());
+    for line in mountinfo.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() > 4 && f[4] == "/" {
-            let mut it = f[2].split(':');
-            let maj = it.next()?.parse().ok()?;
-            let min = it.next()?.parse().ok()?;
-            return Some((maj, min));
+        if f.len() < 5 || !CRITICAL.contains(&f[4]) { continue; }
+        let mut it = f[2].split(':');
+        if let (Some(Ok(a)), Some(Ok(b))) = (it.next().map(str::parse), it.next().map(str::parse)) {
+            nums.push((a, b));
+        }
+        // after the optional fields and their "-" separator come fstype, source, options
+        if let Some(sep) = f.iter().position(|x| *x == "-") {
+            if let Some(src) = f.get(sep + 2) {
+                if src.starts_with("/dev/") { srcs.push((*src).to_string()); }
+            }
         }
     }
-    None
+    (nums, srcs)
+}
+
+/// Walk a mount source back to the whole disks it lives on: a partition to its disk, and a
+/// device-mapper node (LUKS, LVM) through its slaves, which is how an encrypted root resolves.
+fn disks_behind(source: &str) -> Vec<String> {
+    let real = fs::canonicalize(source).unwrap_or_else(|_| PathBuf::from(source));
+    let name = match real.file_name() { Some(n) => n.to_string_lossy().to_string(), None => return vec![] };
+    let mut out = Vec::new();
+    let slaves = Path::new("/sys/class/block").join(&name).join("slaves");
+    if slaves.is_dir() {
+        if let Ok(rd) = fs::read_dir(&slaves) {
+            for e in rd.flatten() {
+                out.extend(disks_behind(&format!("/dev/{}", e.file_name().to_string_lossy())));
+            }
+        }
+        if !out.is_empty() { return out; }
+    }
+    // a partition's directory sits inside its disk's directory
+    if let Ok(link) = fs::read_link(Path::new("/sys/class/block").join(&name)) {
+        let parts: Vec<String> = link.iter().map(|c| c.to_string_lossy().to_string()).collect();
+        if parts.len() >= 2 {
+            let parent = &parts[parts.len() - 2];
+            if Path::new("/sys/block").join(parent).is_dir() { out.push(parent.clone()); return out; }
+        }
+    }
+    if Path::new("/sys/block").join(&name).is_dir() { out.push(name); }
+    out
 }
 
 fn mounts_for(prefixes: &[String]) -> Vec<String> {
@@ -71,7 +111,9 @@ fn mounts_for(prefixes: &[String]) -> Vec<String> {
 
 pub fn list(include_loop: bool) -> Vec<Device> {
     let mut devices = Vec::new();
-    let root = root_dev_numbers();
+    let mi = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    let (root_nums, root_srcs) = critical_sources(&mi);
+    let system_disks: Vec<String> = root_srcs.iter().flat_map(|s| disks_behind(s)).collect();
     let entries = match fs::read_dir("/sys/block") { Ok(e) => e, Err(_) => return devices };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
@@ -89,9 +131,10 @@ pub fn list(include_loop: bool) -> Vec<Device> {
             .or_else(|| read_trim(&sysdir.join("device/name")))
             .unwrap_or_else(|| "unknown".into());
         let dev = read_trim(&sysdir.join("dev")).unwrap_or_default();
-        let mut holds_root = false;
-        if let Some((rmaj, rmin)) = root {
-            // the disk itself, or any of its partitions, backing "/"
+        // signal one: this disk, or one of its partitions, was resolved from a critical mount
+        let mut holds_root = system_disks.contains(&name);
+        // signal two: the kernel's own major:minor for a critical mount
+        if !holds_root {
             let mut nums = vec![dev.clone()];
             if let Ok(rd) = fs::read_dir(&sysdir) {
                 for p in rd.flatten() {
@@ -104,7 +147,7 @@ pub fn list(include_loop: bool) -> Vec<Device> {
             holds_root = nums.iter().any(|d| {
                 let mut it = d.split(':');
                 match (it.next().and_then(|x| x.parse::<u32>().ok()), it.next().and_then(|x| x.parse::<u32>().ok())) {
-                    (Some(a), Some(b)) => a == rmaj && b == rmin,
+                    (Some(a), Some(b)) => root_nums.contains(&(a, b)),
                     _ => false,
                 }
             });
@@ -172,6 +215,21 @@ mod tests {
     fn a_removable_stick_is_allowed_and_an_empty_reader_is_not() {
         assert!(dev(true, false, 1 << 30).refusal(false).is_none());
         assert!(dev(true, false, 0).refusal(false).is_some()); // card reader with no card
+    }
+
+    // The host this was written on runs btrfs, where "/" reports device 0:35 and no disk in
+    // /sys carries that number. An earlier version checked only the number and would have
+    // offered the system disk as an ordinary target.
+    #[test]
+    fn a_btrfs_root_is_still_traced_back_to_its_disk() {
+        let mi = "25 1 0:35 /@ / rw,relatime shared:1 - btrfs /dev/nvme0n1p2 rw,ssd,subvol=/@\n\
+                  31 25 259:1 / /boot/efi rw - vfat /dev/nvme0n1p1 rw\n\
+                  40 25 8:33 / /run/media/me/STICK rw - vfat /dev/sdc1 rw";
+        let (nums, srcs) = critical_sources(mi);
+        assert!(nums.contains(&(0, 35)), "the anonymous number is still recorded");
+        assert!(srcs.contains(&"/dev/nvme0n1p2".to_string()), "the real source must be found");
+        assert!(srcs.contains(&"/dev/nvme0n1p1".to_string()), "/boot/efi counts too");
+        assert!(!srcs.contains(&"/dev/sdc1".to_string()), "a plugged in stick is not critical");
     }
 
     #[test]
