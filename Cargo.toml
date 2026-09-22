@@ -1,0 +1,21 @@
+[package]
+name = "arxburn"
+version = "0.1.0"
+edition = "2021"
+description = "Write an image to a USB stick, and prove the stick got it"
+license = "MIT"
+repository = "https://github.com/0xb0rn3/arxburn"
+
+# No dependencies, deliberately. A burn tool is what you reach for on a machine that has just been
+# installed or is refusing to boot, so it has to build and run with nothing but std.
+
+[[bin]]
+name = "arxburn"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
