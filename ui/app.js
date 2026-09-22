@@ -117,12 +117,22 @@ function renderImages() {
            <button class="glass small" data-act="get">Download</button></div>`;
     li.querySelector('[data-act="resolve"]').onclick = async (e) => {
       e.stopPropagation();
+      // the answer belongs next to the row that was asked, not only in the log on another
+      // panel where nobody looking at this list would ever see it
+      const meta = li.querySelector(".meta");
+      const was = meta.textContent;
+      meta.textContent = "asking the mirror…";
       log(`asking ${i.id} what the newest build is…`, "step");
       try {
         const r = await invoke("resolve", { id: i.id });
+        meta.innerHTML = `<span style="color:var(--ok)">${r.filename}</span>` +
+          (r.size ? ` &middot; ${human(r.size)}` : "") +
+          (r.sha256 ? `<br><span style="font-size:.66rem">sha256 ${r.sha256}</span>` : "");
         log(`${i.id}: ${r.filename}${r.size ? " (" + human(r.size) + ")" : ""}`, "ok");
-        if (r.sha256) log(`published sha256 ${r.sha256}`);
-      } catch (err) { log(String(err), "err"); }
+      } catch (err) {
+        meta.textContent = was;
+        log(String(err), "err");
+      }
     };
     li.querySelector('[data-act="get"]').onclick = async (e) => {
       e.stopPropagation();
@@ -211,9 +221,9 @@ $("image-path").oninput = ready;
 $("search").oninput = renderImages;
 $("family").onchange = renderImages;
 
-document.querySelectorAll(".tab").forEach((tab) => {
+document.querySelectorAll(".nav-item").forEach((tab) => {
   tab.onclick = () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    document.querySelectorAll(".nav-item").forEach((t) => t.classList.remove("active"));
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     tab.classList.add("active");
     $(tab.dataset.tab).classList.add("active");

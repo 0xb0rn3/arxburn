@@ -296,10 +296,6 @@ fn cmd_get(args: &[String]) {
 /// Download with a live counter. curl draws its own bar on a terminal, but the GUI needs bytes
 /// on the pipe, and either way the file on disk is the honest counter: it is what a resume would
 /// pick up from.
-fn download_watched(url: &str, dest: &Path, total: u64) {
-    download_parallel_or_single(url, dest, total, &[]);
-}
-
 /// Pull the file over as many connections as the machine and the mirror allow, falling back to
 /// one connection when ranges are not on offer.
 fn download_parallel_or_single(url: &str, dest: &Path, total: u64, args: &[String]) {

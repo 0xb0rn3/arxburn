@@ -80,11 +80,35 @@ entry avoids picking up the mac and edu variants that sort above the one you wan
 ## Install
 
 ```sh
-cargo build --release
+sudo ./install.sh
+```
+
+That builds as the user who called sudo (rustup toolchains are per user, and under sudo root
+usually has none), installs `arxburn` into `/usr/bin`, and installs the window as well when its
+libraries are present. `--no-gui` skips it, `--gui` insists on it.
+
+By hand, if you prefer:
+
+```sh
+cargo build --release                       # the CLI only
 sudo install -Dm755 target/release/arxburn /usr/bin/arxburn
 ```
 
-or `sudo ./install.sh`, which does the same.
+### The window
+
+`arxburn-gui` is a separate crate, so a bare `cargo build --release` does NOT build it: this
+workspace's root is itself a package, and a plain build builds only that one. It needs a system
+webkit.
+
+```sh
+sudo pacman -S --needed webkit2gtk-4.1 gtk3 libsoup3      # Arch, EndeavourOS, ArxOS
+cargo build --release -p arxburn-gui
+sudo install -Dm755 target/release/arxburn-gui /usr/bin/arxburn-gui
+```
+
+The window runs the same `arxburn` binary underneath and shows what it prints, so the refusals,
+the unmounting and the verification are decided in one place. A burn goes through `pkexec`, so no
+password is ever typed into the window.
 
 ## Options
 

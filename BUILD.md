@@ -22,10 +22,16 @@ ui/             the GUI's html, css and js
 ## Build
 
 ```sh
-cargo build --release                 # both, workspace
-cargo build --release -p arxburn      # the CLI alone, no network needed after the first time
+cargo build --release                 # the CLI ONLY: the workspace root is itself a package,
+                                      # so a bare build does not touch src-tauri
 cargo build --release -p arxburn-gui  # the GUI (needs webkit2gtk-4.1, libsoup3, gtk3)
+cargo build --release --workspace     # both
+sudo ./install.sh                     # builds as $SUDO_USER, installs both when it can
 ```
+
+`install.sh` never builds as root on purpose. rustup toolchains are per user, so under sudo there
+is usually no default toolchain and cargo refuses outright; and anything root did build would
+leave root-owned files in the checkout. It builds as `$SUDO_USER` and installs as root.
 
 The GUI needs a system webkit; the CLI needs nothing. If a build box lacks webkit, build the CLI
 alone rather than adding a dependency to it.

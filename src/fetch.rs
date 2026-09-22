@@ -370,6 +370,13 @@ where S: FnMut(f64),
     let began = Instant::now();
     loop {
         if stop.load(Ordering::Relaxed) { let _ = child.kill(); break; }
+        // checked before the read, not after, so a connection that never answers at all is
+        // caught too, and so the initial value is actually used
+        if last_byte.elapsed() > STALL_AFTER {
+            let _ = child.kill();
+            return Err(format!("a connection{} stalled",
+                if netname.is_empty() { String::new() } else { format!(" on {netname}") }));
+        }
         match out.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -382,11 +389,6 @@ where S: FnMut(f64),
                 speed(written as f64 / secs);
             }
             Err(e) => { let _ = child.kill(); return Err(format!("read: {e}")); }
-        }
-        if last_byte.elapsed() > STALL_AFTER {
-            let _ = child.kill();
-            return Err(format!("a connection{} stalled",
-                if netname.is_empty() { String::new() } else { format!(" on {netname}") }));
         }
     }
     let status = child.wait().map_err(|e| format!("curl: {e}"))?;
