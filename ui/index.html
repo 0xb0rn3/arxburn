@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,71 +7,104 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header>
-  <div class="mark">
-    <span class="glyph">&#9679;</span>
-    <div>
-      <h1>arxburn</h1>
-      <p id="version">reading the engine…</p>
-    </div>
-  </div>
-  <nav>
-    <button class="tab active" data-tab="burn">Burn</button>
-    <button class="tab" data-tab="images">Images</button>
-  </nav>
-</header>
+<div class="app">
 
-<main>
-  <section id="burn" class="panel active">
-    <div class="cols">
-      <div class="col">
-        <h2>1. The image</h2>
-        <div class="field">
-          <input id="image-path" type="text" spellcheck="false"
+  <aside class="deck">
+    <div class="brand">
+      <div class="mark">&#9673;</div>
+      <div class="wordmark">arxburn</div>
+      <div class="sub">write and verify</div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-tab="burn">
+        <svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v9.6l2.3-2.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4l2.3 2.3V3a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
+        Burn
+      </button>
+      <button class="nav-item" data-tab="images">
+        <svg viewBox="0 0 24 24"><path d="M12 2c5.5 0 10 1.8 10 4v12c0 2.2-4.5 4-10 4S2 20.2 2 18V6c0-2.2 4.5-4 10-4zm0 2C7.3 4 4 5.2 4 6s3.3 2 8 2 8-1.2 8-2-3.3-2-8-2zm8 5.4C18.2 10.4 15.3 11 12 11s-6.2-.6-8-1.6V12c0 .8 3.3 2 8 2s8-1.2 8-2V9.4zm0 6C18.2 16.4 15.3 17 12 17s-6.2-.6-8-1.6V18c0 .8 3.3 2 8 2s8-1.2 8-2v-2.6z"/></svg>
+        Images
+      </button>
+    </nav>
+
+    <div class="deck-foot">
+      <span id="version" class="mono">reading the engine</span>
+      <span id="engine" class="mono dim"></span>
+      <span class="stingray">Stingray Labs</span>
+    </div>
+  </aside>
+
+  <main class="stage">
+
+    <section id="burn" class="panel active">
+      <div class="phead">
+        <h1 class="pf">Write an image</h1>
+        <p>Pick a file and a disk. It is written, read back, and checked byte for byte.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="card-head"><span class="k">1. The image</span></div>
+          <input id="image-path" type="text" class="mono" spellcheck="false"
                  placeholder="/home/you/Downloads/arxos-0.0.1.iso" />
+          <ul id="local-list" class="rows"></ul>
         </div>
-        <ul id="local-list" class="list"></ul>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="k">2. The disk</span>
+            <button id="refresh" class="glass small">Look again</button>
+          </div>
+          <ul id="device-list" class="rows"></ul>
+        </div>
       </div>
 
-      <div class="col">
-        <h2>2. The disk</h2>
-        <ul id="device-list" class="list"></ul>
-        <button id="refresh" class="ghost">Look again</button>
+      <div class="card action">
+        <label class="check">
+          <input id="verify" type="checkbox" checked />
+          <span>Read it back afterwards and check every byte</span>
+        </label>
+        <button id="burn-btn" class="primary" disabled>Write it</button>
       </div>
-    </div>
 
-    <div class="go">
-      <label class="check"><input id="verify" type="checkbox" checked /> read it back afterwards and check every byte</label>
-      <button id="burn-btn" disabled>Write it</button>
-    </div>
-
-    <div id="progress" class="progress hidden">
-      <div class="bar"><div id="bar-fill"></div></div>
-      <div class="numbers">
-        <span id="phase">working</span>
-        <span id="bytes" class="mono">0</span>
-        <span id="rate" class="mono"></span>
-        <span id="eta" class="mono"></span>
+      <div id="progress" class="card progress hidden">
+        <div class="prow">
+          <span id="phase" class="pf phase">working</span>
+          <button id="cancel" class="glass small danger">Stop</button>
+        </div>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <div class="numbers mono">
+          <span id="bytes">0</span>
+          <span id="rate"></span>
+          <span id="eta"></span>
+        </div>
       </div>
-      <button id="cancel" class="ghost danger">Stop</button>
-    </div>
 
-    <ul id="log" class="log"></ul>
-  </section>
+      <ul id="log" class="log mono"></ul>
+    </section>
 
-  <section id="images" class="panel">
-    <div class="field row">
-      <input id="search" type="text" placeholder="search: arch, kali, windows, rescue…" />
-      <select id="family">
-        <option value="">everything</option>
-        <option value="linux">linux</option>
-        <option value="windows">windows</option>
-        <option value="tool">rescue and tools</option>
-      </select>
-    </div>
-    <ul id="image-list" class="list wide"></ul>
-  </section>
-</main>
+    <section id="images" class="panel">
+      <div class="phead">
+        <h1 class="pf">Images</h1>
+        <p>Resolved live, so the list never goes stale. ArxOS, the Linux distributions, rescue
+           tools, and Windows.</p>
+      </div>
+
+      <div class="filters">
+        <input id="search" type="text" placeholder="arch, kali, windows, rescue" />
+        <select id="family">
+          <option value="">Everything</option>
+          <option value="linux">Linux</option>
+          <option value="windows">Windows</option>
+          <option value="tool">Rescue and tools</option>
+        </select>
+      </div>
+
+      <ul id="image-list" class="rows wide"></ul>
+    </section>
+
+  </main>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

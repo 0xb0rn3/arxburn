@@ -35,18 +35,18 @@ async function loadDevices() {
   for (const d of answer.devices || []) {
     const li = document.createElement("li");
     const refused = d.refusal;
-    // The one rule that is absolute gets said in full, not hidden behind a disabled button.
-    const status = d.holds_root
-      ? `<span class="sys">THIS IS YOUR SYSTEM DISK</span>`
+    // The one rule that is absolute is stated in full, not hidden behind a disabled button.
+    const side = d.holds_root
+      ? `<span class="tag sys">system disk</span><span class="why">this is what you are running; it can never be a target</span>`
       : refused
-        ? `<span class="why">${refused}</span>`
+        ? `<span class="tag no">not offered</span><span class="why">${refused}</span>`
         : (d.mounts && d.mounts.length)
-          ? `<span class="warn">mounted at ${d.mounts.join(", ")}, it will be unmounted</span>`
-          : `<span class="ok">ready</span>`;
+          ? `<span class="tag warn">mounted</span><span class="why">${d.mounts.join(", ")}, it will be unmounted first</span>`
+          : `<span class="tag ok">ready</span>`;
     li.innerHTML = `<div>
-        <div class="name">${d.name} <span class="meta">${d.model || ""}</span></div>
+        <div class="name">${d.name}<span class="model">${d.model || ""}</span></div>
         <div class="meta">${d.size_human} &middot; ${d.removable ? "removable" : "internal"}</div>
-      </div><div style="text-align:right">${status}</div>`;
+      </div><div class="side">${side}</div>`;
 
     const canPick = !d.holds_root && (!refused || d.refusal_internal_allowed === null);
     if (!canPick) li.classList.add("refused");
@@ -71,7 +71,7 @@ async function loadLocal() {
   for (const f of files) {
     const li = document.createElement("li");
     li.innerHTML = `<div><div class="name">${f.name}</div>
-      <div class="meta">${f.path}</div></div><span class="meta">${human(f.size)}</span>`;
+      <div class="meta">${f.path}</div></div><span class="side meta">${human(f.size)}</span>`;
     li.onclick = () => {
       $("image-path").value = f.path;
       picked.image = f.path;
@@ -83,8 +83,8 @@ async function loadLocal() {
   }
   if (!files.length) {
     const li = document.createElement("li");
-    li.className = "refused";
-    li.innerHTML = `<span class="meta">nothing in Downloads or your home; type a path above, or fetch one from Images</span>`;
+    li.className = "empty";
+    li.textContent = "No .iso or .img found in Downloads or your home. Type a path above, or fetch one from Images.";
     list.appendChild(li);
   }
 }
@@ -111,10 +111,10 @@ function renderImages() {
     if (family && i.family !== family) continue;
     if (term && !(`${i.id} ${i.name} ${i.note}`.toLowerCase().includes(term))) continue;
     const li = document.createElement("li");
-    li.innerHTML = `<div><div class="name">${i.name} <span class="meta">${i.id}</span></div>
+    li.innerHTML = `<div><div class="name">${i.name}<span class="model">${i.id}</span></div>
         <div class="meta">${i.note}</div></div>
-      <div><button class="ghost small" data-act="resolve">latest</button>
-           <button class="small" data-act="get">download</button></div>`;
+      <div class="acts"><button class="glass small" data-act="resolve">Latest</button>
+           <button class="glass small" data-act="get">Download</button></div>`;
     li.querySelector('[data-act="resolve"]').onclick = async (e) => {
       e.stopPropagation();
       log(`asking ${i.id} what the newest build is…`, "step");
@@ -222,7 +222,11 @@ document.querySelectorAll(".tab").forEach((tab) => {
 });
 
 (async () => {
-  $("version").textContent = await invoke("version");
+  // the deck foot carries what the engine says about itself: version, hash engine, block size
+  const v = await invoke("version");
+  const m = v.match(/^(\S+\s+\S+)\s*\((.*)\)$/);
+  $("version").textContent = m ? m[1] : v;
+  $("engine").textContent = m ? m[2] : "";
   await loadDevices();
   await loadLocal();
 })();
