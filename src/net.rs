@@ -43,29 +43,92 @@ pub fn text_with(url: &str, headers: &[String]) -> Result<String, String> {
 
 /// Download to a file, resuming a partial one, with the client's own progress meter on the
 /// terminal. A 5GB image over a bad line is exactly the case where resume matters.
-pub fn download(url: &str, dest: &Path) -> Result<(), String> {
+/// `headers`, when given, is a file curl writes the real response headers into. That is where the
+/// true size comes from: a separate probe request can be slow or refused (GitHub redirects release
+/// downloads to a storage host that has timed out at twenty seconds here) while the download
+/// itself is perfectly healthy. The transfer always knows how big the thing it is transferring is.
+pub fn download(url: &str, dest: &Path, headers: Option<&Path>) -> Result<(), String> {
     let c = client().ok_or("neither curl nor wget is installed")?;
     let d = dest.to_string_lossy().to_string();
     let st = match c {
-        "curl" => Command::new("curl")
-            .args(["-fL", "--retry", "5", "--retry-delay", "3", "-C", "-", "--progress-bar",
-                   "-A", UA, "-o", &d, url]).status(),
+        "curl" => {
+            let mut c = Command::new("curl");
+            c.args(["-fL", "--retry", "5", "--retry-delay", "3", "-C", "-", "-A", UA, "-o", &d, url]);
+            if let Some(h) = headers { c.arg("-D").arg(h); }
+            // curl's own bar is for a person at a terminal; when something is parsing our
+            // output it is just noise on stderr
+            if quiet_meter() { c.arg("--no-progress-meter"); } else { c.arg("--progress-bar"); }
+            c.status()
+        }
         _ => Command::new("wget").args(["-c", "--tries=5", "-U", UA, "-O", &d, url]).status(),
     }.map_err(|e| format!("{c}: {e}"))?;
     if !st.success() { return Err(format!("download failed ({st})")); }
     Ok(())
 }
 
+/// True when another program is reading our output and curl should stay quiet.
+fn quiet_meter() -> bool { std::env::args().any(|a| a == "--json") }
+
 pub const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) arxburn";
 
-/// The size the server reports, so a target can be checked before 4GB is pulled down.
-pub fn remote_size(url: &str) -> Option<u64> {
-    let out = Command::new("curl").args(["-fsIL", "--max-time", "30", "-A", UA, url]).output().ok()?;
-    let head = String::from_utf8_lossy(&out.stdout);
+/// Read a total out of response headers: either `Content-Range: bytes 0-0/4100096`, which carries
+/// the whole size even for a one byte request, or a plain `Content-Length`. Redirects answer
+/// `Content-Length: 0`, so zeros are skipped rather than believed: taking them at face value is
+/// what left every progress bar sitting at 0% for the length of the download.
+pub fn size_in_headers(head: &str) -> Option<u64> {
+    for line in head.lines().rev() {
+        let low = line.to_ascii_lowercase();
+        if let Some(rest) = low.strip_prefix("content-range:") {
+            if let Some(total) = rest.rsplit('/').next() {
+                if let Ok(n) = total.trim().parse::<u64>() { if n > 0 { return Some(n); } }
+            }
+        }
+    }
     head.lines().rev()
-        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|v| v.trim().parse().ok())
+        .filter(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+        .filter_map(|l| l.split(':').nth(1))
+        .filter_map(|v| v.trim().parse::<u64>().ok())
+        .find(|n| *n > 1)
+}
+
+/// The size the server reports, so a target can be checked before 4GB is pulled down, and so a
+/// progress bar has a denominator.
+///
+/// This asks for one byte rather than sending a HEAD. A range request answers
+/// `Content-Range: bytes 0-0/4100096`, which carries the whole size, and it works on mirrors that
+/// refuse HEAD outright. GitHub redirects release downloads to a storage host, and the redirect
+/// itself answers `Content-Length: 0`, so the zeros are skipped rather than believed.
+pub fn remote_size(url: &str) -> Option<u64> {
+    let out = Command::new("curl")
+        .args(["-sL", "-r", "0-0", "-o", "/dev/null", "-D", "-",
+               "--max-time", "12", "--connect-timeout", "5", "-A", UA, url])
+        .output().ok()?;
+    size_in_headers(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::size_in_headers;
+
+    #[test]
+    fn a_redirects_zero_length_is_never_mistaken_for_the_size() {
+        // exactly what github answers for a release download: a 302 with no body, then the file
+        let head = "HTTP/2 302\r\ncontent-length: 0\r\n\r\nHTTP/2 206\r\n\
+                    content-range: bytes 0-0/4100096\r\ncontent-length: 1\r\n";
+        assert_eq!(size_in_headers(head), Some(4_100_096));
+    }
+
+    #[test]
+    fn a_plain_download_reports_its_content_length() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 4223172608\r\n";
+        assert_eq!(size_in_headers(head), Some(4_223_172_608));
+    }
+
+    #[test]
+    fn headers_that_say_nothing_useful_give_no_answer_rather_than_zero() {
+        assert_eq!(size_in_headers("HTTP/2 200\r\ncontent-length: 0\r\n"), None);
+        assert_eq!(size_in_headers(""), None);
+    }
 }
 
 /// Pull the href targets out of an HTML index or a plain listing.
@@ -121,7 +184,7 @@ pub fn natural_newer(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 #[cfg(test)]
-mod tests {
+mod size_tests {
     use super::*;
     use std::cmp::Ordering;
 

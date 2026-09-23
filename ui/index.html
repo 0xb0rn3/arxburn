@@ -79,20 +79,6 @@
         <button id="burn-btn" class="primary" disabled>Write it</button>
       </div>
 
-      <div id="progress" class="card progress hidden">
-        <div class="prow">
-          <span id="phase" class="pf phase">working</span>
-          <button id="cancel" class="glass small danger">Stop</button>
-        </div>
-        <div class="bar"><div id="bar-fill"></div></div>
-        <div class="numbers mono">
-          <span id="bytes">0</span>
-          <span id="rate"></span>
-          <span id="eta"></span>
-        </div>
-      </div>
-
-      <ul id="log" class="log mono"></ul>
     </section>
 
     <section id="images" class="panel">
@@ -115,6 +101,22 @@
       <ul id="image-list" class="rows wide"></ul>
     </section>
 
+    <!-- Shown on every panel: a job started from Images used to report into the Burn panel,
+         where nobody was looking. -->
+      <div id="progress" class="card progress hidden">
+        <div class="prow">
+          <span id="phase" class="pf phase">working</span>
+          <button id="cancel" class="glass small danger">Stop</button>
+        </div>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <div class="numbers mono">
+          <span id="bytes">0</span>
+          <span id="rate"></span>
+          <span id="eta"></span>
+        </div>
+      </div>
+
+      <ul id="log" class="log mono"></ul>
   </main>
 </div>
 <script src="app.js"></script>

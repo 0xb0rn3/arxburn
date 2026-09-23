@@ -5,6 +5,7 @@ const listen = window.__TAURI__.event.listen;
 
 const $ = (id) => document.getElementById(id);
 let picked = { image: null, device: null, allowInternal: false };
+let sawProgress = false;
 let images = [];
 
 function human(n) {
@@ -152,10 +153,12 @@ function renderImages() {
     li.querySelector('[data-act="get"]').onclick = async (e) => {
       e.stopPropagation();
       const out = (await homeDir()) + "/Downloads";
+      const meta = li.querySelector(".meta");
+      meta.textContent = `downloading into ${out}…`;
       log(`downloading ${i.id} into ${out}`, "step");
       showProgress("download");
       try { await invoke("start_download", { id: i.id, out }); }
-      catch (err) { log(String(err), "err"); hideProgress(); }
+      catch (err) { meta.innerHTML = `<span class="warn">${String(err)}</span>`; log(String(err), "err"); hideProgress(); }
     };
     list.appendChild(li);
   }
@@ -182,16 +185,25 @@ listen("arxburn", (e) => {
   const m = e.payload || {};
   switch (m.event) {
     case "progress": {
-      const pct = m.total ? Math.floor((m.done * 100) / m.total) : 0;
-      $("bar-fill").style.width = pct + "%";
-      $("phase").textContent = `${m.phase || "working"} ${pct}%`;
-      // byte for byte, because that is the number that shows it is really moving
-      $("bytes").textContent = `${commas(m.done)} / ${commas(m.total)} bytes`;
+      sawProgress = true;
+      const known = m.total > 0;
+      const pct = known ? Math.floor((m.done * 100) / m.total) : 0;
+      // a server that never said how big the file is must not look like a bar that is stuck
+      $("bar-fill").style.width = known ? pct + "%" : "100%";
+      $("bar-fill").style.opacity = known ? "1" : "0.35";
+      $("phase").textContent = known ? `${m.phase || "working"} ${pct}%` : `${m.phase || "working"}`;
+      $("bytes").textContent = known
+        ? `${commas(m.done)} / ${commas(m.total)} bytes`
+        : `${commas(m.done)} bytes (total unknown)`;
       $("rate").textContent = `${human(m.bytes_per_second)}/s`;
       const eta = m.eta_seconds || 0;
       $("eta").textContent = eta ? `eta ${String(Math.floor(eta / 60)).padStart(2, "0")}:${String(eta % 60).padStart(2, "0")}` : "";
       break;
     }
+    case "started":
+      sawProgress = false;
+      log(m.command, "step");
+      break;
     case "step": log(m.message, "step"); break;
     case "ok": log(m.message, "ok"); break;
     case "error": log(m.message, "err"); break;
@@ -205,6 +217,12 @@ listen("arxburn", (e) => {
     case "finished":
       hideProgress();
       if (m.code !== 0 && m.detail) log(m.detail, "err");
+      // a run that ended without a single progress line never started: say so, rather than
+      // leaving a bar that simply never moved
+      if (!sawProgress && m.code !== 0) {
+        log(`nothing ran (exit ${m.code}). If a password dialog did not appear, polkit may be missing; ` +
+            `try it in a terminal with sudo.`, "err");
+      }
       loadDevices();
       break;
   }

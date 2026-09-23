@@ -15,8 +15,18 @@ use tauri::{AppHandle, Emitter, Manager, State};
 #[derive(Default)]
 struct Running(Mutex<Option<std::process::Child>>);
 
-/// Prefer an installed arxburn, fall back to one sitting next to this binary (a dev build), so
-/// the GUI works both from /usr/bin and straight out of target/release.
+fn which_pkexec() -> Option<String> {
+    std::env::var("PATH").ok()?.split(':')
+        .map(|d| std::path::Path::new(d).join("pkexec"))
+        .find(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Where arxburn is, as an ABSOLUTE path.
+///
+/// Absolute matters: a burn runs through pkexec, and pkexec refuses anything that is not a fully
+/// qualified path. Returning a bare "arxburn" meant the burn died instantly with a message the
+/// window never showed, which looked exactly like a loader that never moves.
 fn cli() -> String {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -24,7 +34,13 @@ fn cli() -> String {
             if beside.is_file() { return beside.to_string_lossy().into_owned(); }
         }
     }
-    "arxburn".into()
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            let p = std::path::Path::new(dir).join("arxburn");
+            if p.is_file() { return p.to_string_lossy().into_owned(); }
+        }
+    }
+    "/usr/bin/arxburn".into()
 }
 
 /// One-shot commands: run it, hand back the single JSON line it printed.
@@ -93,20 +109,33 @@ fn stream(app: AppHandle, state: State<'_, Running>, mut args: Vec<String>, priv
         let mut slot = state.0.lock().unwrap();
         if slot.is_some() { return Err("something is already running".into()); }
         args.push("--json".into());
+        let tool = cli();
+        if !std::path::Path::new(&tool).is_file() {
+            return Err(format!("arxburn is not installed ({tool} does not exist). \
+                                Install it first: the window runs the command line tool."));
+        }
         let mut cmd = if privileged {
             // A burn needs root. pkexec asks through the desktop's own dialog, so no password
             // is ever typed into this window, and the GUI never holds one.
+            if which_pkexec().is_none() {
+                return Err("pkexec is not installed, so the window cannot ask for a password. \
+                            Install polkit, or burn from a terminal: sudo arxburn write ...".into());
+            }
             let mut c = Command::new("pkexec");
-            c.arg(cli());
+            c.arg(&tool);
             c
         } else {
-            Command::new(cli())
+            Command::new(&tool)
         };
         cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| {
             if privileged { format!("cannot start pkexec: {e}. Install polkit, or burn from a terminal with sudo.") }
             else { format!("cannot run arxburn: {e}") }
         })?;
+        let _ = app.emit("arxburn", serde_json::json!({
+            "event": "started",
+            "command": format!("{}{} {}", if privileged { "pkexec " } else { "" }, tool, args.join(" ")),
+        }));
         let stdout = child.stdout.take().ok_or("no output from arxburn")?;
         let stderr = child.stderr.take();
         *slot = Some(child);
@@ -114,6 +143,11 @@ fn stream(app: AppHandle, state: State<'_, Running>, mut args: Vec<String>, priv
         let a = app.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if std::env::var_os("ARXBURN_GUI_TRACE").is_some() {
+                    use std::io::Write as _;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                        .open("/tmp/arxburn-gui-events.log") { let _ = writeln!(f, "{line}"); }
+                }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                     let _ = a.emit("arxburn", v);
                 }

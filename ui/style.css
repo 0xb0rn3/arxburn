@@ -151,3 +151,7 @@ button{font:inherit;cursor:pointer;border-radius:var(--r-sm)}
 .check.scheme select{padding:7px 10px;font-size:.76rem;min-width:auto}
 .update{margin-top:10px;width:100%}
 .update.ready{border-color:rgba(232,112,42,.55);color:var(--accent)}
+
+/* the progress card and log sit under whichever panel is open, never inside one */
+.stage > .progress, .stage > .log{margin-top:4px}
+.stage > .progress{position:sticky;bottom:12px;z-index:3}

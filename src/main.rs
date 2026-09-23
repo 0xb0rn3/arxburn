@@ -250,9 +250,21 @@ fn cmd_get(args: &[String]) {
     step(&format!("{} ({})", iso.name, iso.id));
     let r = catalog::resolve(iso).unwrap_or_else(|e| die(&e));
     ok(&format!("newest is {}", r.filename));
-    println!("     {}", r.url);
-    let remote = net::remote_size(&r.url);
-    if let Some(s) = remote { println!("     {}", dev::human(s)); }
+    if !json_mode() { println!("     {}", r.url); }
+    // A HEAD against a mirror can take seconds, and saying nothing through it is exactly what a
+    // dead progress bar looks like from the outside.
+    step("asking the mirror how big it is");
+    // One probe, reused for the size, the already-downloaded check and the decision about
+    // parallel connections. It used to be two requests to the same slow redirect.
+    let probe = fetch::probe(&r.url);
+    let remote = if probe.size > 0 { Some(probe.size) } else { None };
+    match remote {
+        Some(n) if !json_mode() => println!("     {}", dev::human(n)),
+        Some(n) => json::line(&[("event", json::s("size")), ("bytes", json::V::N(n))]),
+        // Not fatal, and not the end of the progress bar either: the download reports its own
+        // size once it starts.
+        None => step("the mirror did not say; the download will report its own size"),
+    }
 
     let out_dir = PathBuf::from(opt(args, "--out").unwrap_or_else(|| ".".into()));
     if !out_dir.is_dir() { die(&format!("no such directory: {}", out_dir.display())); }
@@ -275,23 +287,28 @@ fn cmd_get(args: &[String]) {
                          ("dest", json::s(dest.to_string_lossy())),
                          ("size", match remote { Some(n) => json::V::N(n), None => json::V::Null })]);
         }
-        download_parallel_or_single(&r.url, &dest, remote.unwrap_or(0), args);
+        download_parallel_or_single(&r.url, &dest, &probe, args);
     }
 
     step("checking what landed on disk");
     let (got, len) = hash_file(&dest, Some("hash")).unwrap_or_else(|e| die(&format!("cannot read the download: {e}")));
-    println!("     {} {}", dev::human(len), dest.display());
+    if !json_mode() { println!("     {} {}", dev::human(len), dest.display()); }
     match &r.sha256 {
         Some(expect) if expect == &got => ok(&format!("sha256 matches the project's published hash\n     {got}")),
         Some(expect) => die(&format!("DOWNLOAD IS NOT WHAT THE PROJECT PUBLISHED\n     published {expect}\n     downloaded {got}\n     delete it and try another mirror")),
         None => {
             ok(&format!("sha256 {got}"));
-            println!("  {DIM}this project publishes no checksum next to the image; compare it with their site if you can{RST}");
+            if !json_mode() {
+                println!("  {DIM}this project publishes no checksum next to the image; compare it with their site if you can{RST}");
+            }
         }
     }
 
     match opt(args, "--to") {
-        Some(target) => { println!(); burn(&dest, &target, args, Some((got, len))); }
+        Some(target) => { if !json_mode() { println!(); } burn(&dest, &target, args, Some((got, len))); }
+        None if json_mode() => json::line(&[("event", json::s("ready")),
+                                            ("path", json::s(dest.to_string_lossy())),
+                                            ("bytes", json::V::N(len))]),
         None => {
             println!();
             println!("  {BOLD}arxburn write {} --to <device>{RST}   (arxburn list shows the devices)", dest.display());
@@ -304,12 +321,11 @@ fn cmd_get(args: &[String]) {
 /// pick up from.
 /// Pull the file over as many connections as the machine and the mirror allow, falling back to
 /// one connection when ranges are not on offer.
-fn download_parallel_or_single(url: &str, dest: &Path, total: u64, args: &[String]) {
+fn download_parallel_or_single(url: &str, dest: &Path, p: &fetch::Probe, args: &[String]) {
     let streams = opt(args, "--streams").and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(4).clamp(1, 16);
     if !flag(args, "--single") {
-        let p = fetch::probe(url);
-        let size = if p.size > 0 { p.size } else { total };
+        let size = p.size;
         // below a few tens of megabytes the extra connections cost more than they save
         if p.ranges && size > 32 * 1024 * 1024 {
             step(&format!("fetching over {}", fetch::describe(streams)));
@@ -325,18 +341,31 @@ fn download_parallel_or_single(url: &str, dest: &Path, total: u64, args: &[Strin
             }
         }
     }
-    download_single(url, dest, total);
+    download_single(url, dest, p.size);
 }
 
 fn download_single(url: &str, dest: &Path, total: u64) {
-    let (u, d) = (url.to_string(), dest.to_path_buf());
-    let handle = std::thread::spawn(move || net::download(&u, &d));
+    // curl writes the real response headers here, so that even when the size probe was refused or
+    // timed out the bar gets a denominator a second into the transfer instead of never.
+    let hdr = dest.with_extension("arxburn-headers");
+    let _ = std::fs::remove_file(&hdr);
+    let (u, d, h) = (url.to_string(), dest.to_path_buf(), hdr.clone());
+    let handle = std::thread::spawn(move || net::download(&u, &d, Some(&h)));
     let mut meter = Meter::new("download", total);
+    // a resumed download's headers describe the REMAINING bytes, so what is already on disk
+    // counts towards the total
+    let already = if total == 0 { dest.metadata().map(|m| m.len()).unwrap_or(0) } else { 0 };
     while !handle.is_finished() {
+        if meter.total == 0 {
+            if let Ok(head) = std::fs::read_to_string(&hdr) {
+                if let Some(n) = net::size_in_headers(&head) { meter.set_total(n + already); }
+            }
+        }
         let n = dest.metadata().map(|m| m.len()).unwrap_or(0);
         meter.tick(n);
         std::thread::sleep(Duration::from_millis(150));
     }
+    let _ = std::fs::remove_file(&hdr);
     match handle.join() {
         Ok(Ok(())) => {}
         Ok(Err(e)) => die(&e),
@@ -375,6 +404,9 @@ impl Meter {
         Meter { phase, total, started: now, last_draw: now, last_done: 0, rate: 0.0 }
     }
 
+    /// The size arrived late, from the transfer itself rather than from a probe.
+    fn set_total(&mut self, total: u64) { self.total = total; }
+
     fn tick(&mut self, done: u64) {
         let now = Instant::now();
         if now.duration_since(self.last_draw) < Duration::from_millis(80) && done < self.total { return; }
@@ -401,9 +433,19 @@ impl Meter {
             return;
         }
         const SEGS: usize = 24;
-        let filled = if self.total > 0 { (done as u128 * SEGS as u128 / self.total as u128) as usize } else { 0 };
+        if self.total == 0 {
+            // the server never said how big it is: show what has arrived, not a bar that cannot move
+            let spin = ['\u{25B0}', '\u{25B1}'];
+            let phase = (self.started.elapsed().as_millis() / 120) as usize;
+            let bar: String = (0..SEGS).map(|i| spin[(i + phase) % 2]).collect();
+            print!("\r  {YEL}{bar}{RST}  {:>13} bytes  {:>9}/s  (total unknown)   ",
+                with_commas(done), dev::human(self.rate as u64));
+            let _ = std::io::stdout().flush();
+            return;
+        }
+        let filled = (done as u128 * SEGS as u128 / self.total as u128) as usize;
         let bar: String = (0..SEGS).map(|i| if i < filled { '\u{25B0}' } else { '\u{25B1}' }).collect();
-        let pct = if self.total > 0 { done * 100 / self.total } else { 0 };
+        let pct = done * 100 / self.total;
         print!("\r  {YEL}{bar}{RST} {pct:>3}%  {:>13} / {:<13} {:>9}/s  eta {:02}:{:02}  ",
             with_commas(done), with_commas(self.total), dev::human(self.rate as u64), eta / 60, eta % 60);
         let _ = std::io::stdout().flush();
@@ -584,7 +626,7 @@ fn cmd_update(args: &[String]) {
         let Some(want) = want else { no(&format!("no published hash for {asset}, skipped")); continue };
         let tmp = dest.with_extension("new");
         step(&format!("downloading {asset}"));
-        if let Err(e) = net::download(&format!("{base}/{asset}"), &tmp) { let _ = std::fs::remove_file(&tmp); die(&e); }
+        if let Err(e) = net::download(&format!("{base}/{asset}"), &tmp, None) { let _ = std::fs::remove_file(&tmp); die(&e); }
         let (got, _) = hash_file(&tmp, None).unwrap_or_else(|e| die(&format!("cannot read the download: {e}")));
         if got != want {
             let _ = std::fs::remove_file(&tmp);

@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"What the window is allowed to ask the core for. Commands this app defines are always callable; the event channel is not, and without it the window can call arxburn but never hear a word back, which is a progress bar that never moves.","local":true,"windows":["main"],"permissions":["core:event:default"]}}
