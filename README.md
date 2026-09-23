@@ -8,6 +8,20 @@ do it. `dd` is exact, always present, and will erase the wrong disk without a wo
 real control over the target and a list of images to download. arxburn keeps all of that in one
 native binary with no dependencies at all.
 
+## Install it in one line
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xb0rn3/arxburn/main/install.sh | sudo sh
+```
+
+That installs the command line tool and the window. Run it from a terminal instead of a pipe and
+it asks whether you want the published binaries or a build from source; `--binary` and `--source`
+choose for you, `--no-gui` skips the window.
+
+The published `arxburn` is a **static** binary: no glibc version to match, no runtime
+dependencies, so it runs on any x86_64 Linux. Everything downloaded is checked against the
+published `SHA256SUMS` before a single file is installed.
+
 ```sh
 arxburn list                          # what is plugged in, and what it refuses to touch
 arxburn iso                           # images it can fetch, ours and everyone else's
@@ -77,15 +91,16 @@ Sources: `direct:URL`, `index:DIR|PREFIX|SUFFIX[|REJECT]`,
 `fwlink:URL`. `REJECT` is a comma separated list of substrings to skip, which is how the Debian
 entry avoids picking up the mac and edu variants that sort above the one you want.
 
-## Install
+## Installing from a checkout
 
 ```sh
-sudo ./install.sh
+git clone https://github.com/0xb0rn3/arxburn && cd arxburn
+sudo ./install.sh            # asks: published binaries, or build from source
 ```
 
-That builds as the user who called sudo (rustup toolchains are per user, and under sudo root
+It builds as the user who called sudo (rustup toolchains are per user, and under sudo root
 usually has none), installs `arxburn` into `/usr/bin`, and installs the window as well when its
-libraries are present. `--no-gui` skips it, `--gui` insists on it.
+libraries are present.
 
 By hand, if you prefer:
 
@@ -130,6 +145,44 @@ people overwrite the wrong disk.
 sudo arxburn write arxos-0.0.1.iso --to sdc \
   --expect 18d87568b4e2cf4d2e83bb0052c93a5d76b12708bd942e86029ea612c1f2d44d
 ```
+
+## If something does not work
+
+**`sudo ./install.sh` says "rustup could not choose a version of cargo to run".**
+rustup toolchains belong to a user, and root usually has none. The installer builds as
+`$SUDO_USER` for exactly this reason, so this only appears if that user has no default either:
+
+```sh
+rustup default stable
+```
+
+or skip the compiler entirely with `sudo ./install.sh --binary`.
+
+**`arxburn-gui: command not found` after a successful `cargo build --release`.**
+That command builds only the root package. The window is a separate crate:
+
+```sh
+cargo build --release -p arxburn-gui
+sudo install -Dm755 target/release/arxburn-gui /usr/bin/arxburn-gui
+```
+
+`install.sh` does this for you when webkit is present.
+
+**The window opens white, or the desktop offers to kill it.**
+WebKitGTK picks a renderer at startup and gets it wrong on plenty of drivers, in virtual
+machines and over remote sessions. arxburn now turns the DMA-BUF renderer off for itself, so
+this should be handled; if you still see it, run it with the switches set by hand and tell us:
+
+```sh
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 arxburn-gui
+```
+
+**The window says the command line tool is missing.** The window runs `arxburn`; install it
+first, or keep both binaries in the same directory.
+
+**Nothing in the device list.** `arxburn list` needs no privileges, but writing does. The window
+asks for a password through `pkexec` when you press the button, so polkit has to be installed.
+From a terminal, `sudo arxburn write ...` works with no polkit at all.
 
 ## Why there are no dependencies
 

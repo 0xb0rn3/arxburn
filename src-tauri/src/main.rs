@@ -165,6 +165,18 @@ fn version() -> String {
 }
 
 fn main() {
+    // WebKitGTK picks a renderer at startup and gets it wrong often enough that a blank white
+    // window is the single most common way this app "does not work": DMA-BUF buffers fail on
+    // plenty of drivers, in virtual machines, and over remote sessions, and WebKit does not fall
+    // back on its own. Turning that off costs nothing here (this UI is text and boxes) and it is
+    // only set when the user has not chosen for themselves.
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    }
+
     tauri::Builder::default()
         .manage(Running::default())
         .invoke_handler(tauri::generate_handler![
