@@ -817,6 +817,21 @@ fn burn(image: &Path, target: &str, args: &[String], known: Option<(String, u64)
 /// stick is kept busy continuously and the hash comes out of the same pass. The progress the
 /// display shows is the writer's own counter: bytes actually handed to the device, never the
 /// bytes we have merely queued.
+/// Bytes the kernel has accepted but not yet handed to any device, from /proc/meminfo.
+///
+/// Dirty is waiting to be written back, Writeback is in flight. Together they are what is still
+/// owed to the hardware, and during a flush the number only falls, which is what makes it usable
+/// as a countdown. The values are in kB and the suffix is on the line, so it is parsed by
+/// position rather than trusted.
+fn unflushed(meminfo: &str) -> u64 {
+    meminfo.lines()
+        .filter(|l| l.starts_with("Dirty:") || l.starts_with("Writeback:"))
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .filter_map(|v| v.parse::<u64>().ok())
+        .map(|kb| kb * 1024)
+        .sum()
+}
+
 fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Duration) {
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
@@ -872,8 +887,34 @@ fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Dur
         if w >= read_total { break; }
         std::thread::sleep(Duration::from_millis(60));
     }
-    step("flushing to the device (this is where a slow stick actually writes)");
-    match writer.join() {
+    // Everything the image contains has now been handed to the kernel, so the counter reads 100%.
+    // The stick has NOT got it yet: most of it is sitting in the page cache, and sync_all below is
+    // where a slow stick really writes, for minutes. A bar frozen at 100% with nothing else moving
+    // is read as "finished", and a stick pulled at that moment is a corrupt stick. So the flush
+    // reports its own progress, counted down from what the kernel still owes the device.
+    step("flushing to the device: this is where a slow stick actually writes, and it is STILL WRITING");
+    step("do not unplug it until this says verified");
+    let flushing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let watch = Arc::clone(&flushing);
+    let watcher = std::thread::spawn(move || {
+        // what the kernel has not yet handed to any device: it only falls, so it is an honest
+        // measure of how much of this wait is left
+        let outstanding = || -> u64 {
+            std::fs::read_to_string("/proc/meminfo").map(|mi| unflushed(&mi)).unwrap_or(0)
+        };
+        let peak = outstanding().max(1);
+        let mut m = Meter::new("flush", peak);
+        while watch.load(Ordering::Relaxed) {
+            let left = outstanding();
+            m.tick(peak.saturating_sub(left.min(peak)));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        m.finish(peak);
+    });
+    let joined = writer.join();
+    flushing.store(false, Ordering::Relaxed);
+    let _ = watcher.join();
+    match joined {
         Ok(Ok(())) => {}
         Ok(Err(e)) => die(&format!("write device: {e}")),
         Err(_) => die("the writing thread stopped unexpectedly; the stick is not complete"),
@@ -958,3 +999,35 @@ fn drop_caches() {
 
 extern "C" { fn geteuid() -> u32; }
 unsafe fn libc_geteuid() -> u32 { geteuid() }
+
+#[cfg(test)]
+mod flush_tests {
+    use super::unflushed;
+
+    const SAMPLE: &str = "MemTotal:       16316772 kB\n\
+                          Cached:          4212344 kB\n\
+                          Dirty:           1048576 kB\n\
+                          Writeback:         65536 kB\n\
+                          WritebackTmp:          0 kB\n";
+
+    #[test]
+    fn what_the_kernel_still_owes_the_device_is_dirty_plus_writeback() {
+        // 1048576 kB + 65536 kB, in bytes
+        assert_eq!(unflushed(SAMPLE), (1_048_576 + 65_536) * 1024);
+    }
+
+    #[test]
+    fn writeback_tmp_is_not_counted_as_outstanding() {
+        // it starts with "Writeback" but it is tmpfs accounting, not bytes owed to a disk;
+        // counting it would make the flush countdown stall short of zero
+        let one = "Dirty:  0 kB\nWritebackTmp:  999999 kB\n";
+        assert_eq!(unflushed(one), 0);
+    }
+
+    #[test]
+    fn a_clean_system_owes_nothing_and_unreadable_input_is_not_a_panic() {
+        assert_eq!(unflushed("Dirty:   0 kB\nWriteback:   0 kB\n"), 0);
+        assert_eq!(unflushed(""), 0);
+        assert_eq!(unflushed("Dirty: notanumber kB\n"), 0);
+    }
+}

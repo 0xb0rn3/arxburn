@@ -186,3 +186,11 @@ button{font:inherit;cursor:pointer;border-radius:var(--r-sm)}
 .dialog-card p{color:var(--muted);margin-top:9px;font-size:.92rem;line-height:1.5}
 .dialog-card .mono{margin-top:14px;font-size:.68rem;color:var(--dim);word-break:break-all;line-height:1.5}
 .dialog-card button{margin-top:22px;width:100%}
+
+/* Shown while a disk is being written. 100% on the bar means the image has been handed to the
+   kernel, not that the stick has it: the flush afterwards is most of the wait on a slow stick,
+   and a stick pulled there is a corrupt stick. */
+.warn{margin-top:12px;padding:9px 12px;border-radius:var(--r-sm);font-size:.78rem;line-height:1.5;
+  color:#ffd98a;background:rgba(224,179,65,.11);border:1px solid rgba(224,179,65,.34)}
+.warn.hidden{display:none}
+.warn strong{color:#ffe7b0}

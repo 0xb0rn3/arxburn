@@ -178,6 +178,7 @@ function showProgress(phase) {
   $("bytes").textContent = "0";
   $("rate").textContent = "";
   $("eta").textContent = "";
+  $("warn").classList.add("hidden");
   // bring it into view rather than pinning it over the page
   $("progress").scrollIntoView({ block: "nearest" });
 }
@@ -239,6 +240,18 @@ listen("arxburn", (e) => {
       $("bytes").textContent = known
         ? `${commas(m.done)} / ${commas(m.total)} bytes`
         : `${commas(m.done)} bytes (total unknown)`;
+      // 100% is not done. The image has been handed to the kernel; the stick is still taking it.
+      const w = $("warn");
+      if (m.phase === "write" || m.phase === "flush") {
+        w.classList.remove("hidden");
+        w.innerHTML = m.phase === "flush"
+          ? `<strong>Still writing.</strong> The image is in the kernel's cache and the stick is
+             taking it now, which on a slow stick is most of the wait. Do not unplug it.`
+          : `<strong>Do not unplug the stick.</strong> Reaching 100% here means the image has been
+             handed to the kernel, not that the stick has it yet.`;
+      } else {
+        w.classList.add("hidden");
+      }
       $("rate").textContent = `${human(m.bytes_per_second)}/s`;
       const eta = m.eta_seconds || 0;
       $("eta").textContent = eta ? `eta ${String(Math.floor(eta / 60)).padStart(2, "0")}:${String(eta % 60).padStart(2, "0")}` : "";
