@@ -10,6 +10,7 @@
 #   --no-gui    command line tool only
 #   --gui       insist on the window, fail loudly if it cannot be installed
 #   --yes       no questions, take the defaults
+#   --uninstall remove everything this script installed
 set -eu
 
 REPO=0xb0rn3/arxburn
@@ -27,6 +28,7 @@ for arg in "$@"; do
     --no-gui) WANT_GUI=no ;;
     --gui) WANT_GUI=yes ;;
     --yes|-y) ASSUME_YES=yes ;;
+    --uninstall|--remove) MODE=uninstall ;;
     -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -39,6 +41,26 @@ step() { printf '\033[1m>>\033[0m %s\n' "$*"; }
 die()  { printf '   \033[31m!!\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "this needs root: sudo $0 (or pipe it to sudo sh)"
+
+if [ "$MODE" = uninstall ]; then
+  # exactly what this script installs, and nothing else: no config to leave behind, because it
+  # never writes any
+  removed=0
+  for f in "$DEST/$BIN" "$DEST/$GUI" \
+           /usr/share/applications/arxburn.desktop \
+           /usr/share/icons/hicolor/256x256/apps/arxburn.png; do
+    if [ -e "$f" ]; then
+      rm -f "$f" && printf '   removed %s\n' "$f" && removed=$((removed + 1))
+    fi
+  done
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
+  if [ "$removed" -eq 0 ]; then
+    printf '   nothing to remove (looked in %s)\n' "$DEST"
+  else
+    printf '   \033[32mok\033[0m arxburn removed\n'
+  fi
+  exit 0
+fi
 
 # Where are we? A checkout can build from source; a piped script cannot.
 D=""

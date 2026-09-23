@@ -30,6 +30,15 @@ arxburn write arxos-0.0.1.iso --to sdc
 arxburn verify arxos-0.0.1.iso --to sdc
 ```
 
+### Removing it
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xb0rn3/arxburn/main/install.sh | sudo sh -s -- --uninstall
+```
+
+or `sudo ./install.sh --uninstall` from a checkout. It removes the two binaries, the menu entry
+and the icon, and nothing else: arxburn writes no configuration and leaves no state behind.
+
 ## What it does that dd does not
 
 * **Refuses the running system.** The disk carrying `/` is never a target, under any flag.
