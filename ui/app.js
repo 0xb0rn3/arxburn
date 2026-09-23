@@ -173,17 +173,15 @@ async function homeDir() {
 
 function showProgress(phase) {
   $("progress").classList.remove("hidden");
-  document.querySelector(".stage").classList.add("has-progress");
   $("phase").textContent = phase;
   $("bar-fill").style.width = "0%";
   $("bytes").textContent = "0";
   $("rate").textContent = "";
   $("eta").textContent = "";
+  // bring it into view rather than pinning it over the page
+  $("progress").scrollIntoView({ block: "nearest" });
 }
-function hideProgress() {
-  $("progress").classList.add("hidden");
-  document.querySelector(".stage").classList.remove("has-progress");
-}
+function hideProgress() { $("progress").classList.add("hidden"); }
 
 // ---- the ending -------------------------------------------------------------------------
 // A burn is watched for minutes and then walked away from. The sound is so somebody in the next
