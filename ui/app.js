@@ -305,6 +305,23 @@ listen("arxburn", (e) => {
       break;
     case "finished":
       hideProgress();
+      if (updating) {
+        // the running window is the binary that was just replaced, so it cannot become the new
+        // one by itself: say so, rather than leaving a button reading "updating" forever
+        updating = false;
+        const b = $("update-btn");
+        b.classList.remove("ready");
+        if (m.code === 0) {
+          updateReady = false;
+          b.textContent = "Check for updates";
+          dialog(true, "Updated",
+            "Both binaries were replaced, each checked against its published sha256. Close this window and open it again to run the new one.", "");
+        } else {
+          b.textContent = "Update failed";
+          dialog(false, "The update did not go through",
+            m.detail || "Nothing was replaced: arxburn only overwrites a file once the download matches its published hash.", "");
+        }
+      }
       if (m.code !== 0 && m.detail) log(m.detail, "err");
       // a run that ended without a single progress line never started: say so, rather than
       // leaving a bar that simply never moved
@@ -407,13 +424,16 @@ document.querySelectorAll(".nav-item").forEach((tab) => {
 
 // Updates: the CLI owns the version comparison and the hash check, this only asks and reports.
 let updateReady = false;
+let updating = false;
 $("update-btn").onclick = async () => {
   const b = $("update-btn");
   if (updateReady) {
     if (!confirm("Replace the installed arxburn with the newest release?")) return;
     b.textContent = "updating…";
+    updating = true;
     log("downloading the newest release", "step");
-    try { await invoke("start_update"); } catch (e) { log(String(e), "err"); b.textContent = "Check for updates"; }
+    try { await invoke("start_update"); }
+    catch (e) { updating = false; log(String(e), "err"); b.textContent = "Check for updates"; }
     return;
   }
   b.textContent = "checking…";

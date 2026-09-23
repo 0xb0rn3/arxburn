@@ -1,6 +1,6 @@
 [package]
 name = "arxburn"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Write an image to a USB stick, and prove the stick got it"
 license = "MIT"

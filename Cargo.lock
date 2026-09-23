@@ -49,11 +49,11 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arxburn"
-version = "0.1.3"
+version = "0.1.4"
 
 [[package]]
 name = "arxburn-gui"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
