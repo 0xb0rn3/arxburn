@@ -30,6 +30,7 @@
     <div class="deck-foot">
       <span id="version" class="mono">reading the engine</span>
       <span id="engine" class="mono dim"></span>
+      <button id="update-btn" class="glass small update">Check for updates</button>
       <span class="stingray">Stingray Labs</span>
     </div>
   </aside>
@@ -47,6 +48,7 @@
           <div class="card-head"><span class="k">1. The image</span></div>
           <input id="image-path" type="text" class="mono" spellcheck="false"
                  placeholder="/home/you/Downloads/arxos-0.0.1.iso" />
+          <div id="image-scheme" class="scheme-line"></div>
           <ul id="local-list" class="rows"></ul>
         </div>
 
@@ -60,10 +62,20 @@
       </div>
 
       <div class="card action">
-        <label class="check">
-          <input id="verify" type="checkbox" checked />
-          <span>Read it back afterwards and check every byte</span>
-        </label>
+        <div class="opts">
+          <label class="check">
+            <input id="verify" type="checkbox" checked />
+            <span>Read it back afterwards and check every byte</span>
+          </label>
+          <label class="check scheme">
+            <span class="k">Partition scheme</span>
+            <select id="scheme">
+              <option value="auto">As the image wrote it</option>
+              <option value="gpt">GPT (UEFI)</option>
+              <option value="mbr">MBR (BIOS)</option>
+            </select>
+          </label>
+        </div>
         <button id="burn-btn" class="primary" disabled>Write it</button>
       </div>
 

@@ -52,6 +52,49 @@ and the icon, and nothing else: arxburn writes no configuration and leaves no st
 * **Reads the bytes back** off the device after writing and hashes them against the image. The page
   cache is dropped first, so the verify reads the stick and not a copy of what was just written.
 
+## GPT or MBR, and what will actually boot
+
+Installer images are usually **hybrid**: an MBR at sector 0 so an old BIOS boots them, a GPT at
+sector 1 so UEFI firmware does, and an El Torito catalog inside. arxburn reads all three and says
+so before it writes anything:
+
+```sh
+arxburn inspect arxos-0.0.1.iso
+```
+```
+>> arxos-0.0.1.iso
+  ok MBR + GPT + El Torito
+     hybrid: boots on UEFI and on old BIOS machines
+  1 unused or raw       7,572,416 sectors at LBA 64         bootable
+  2 EFI system            675,840 sectors at LBA 7572480
+```
+
+Some firmware refuses a stick that looks like the other thing, which is what a partition scheme
+choice is for:
+
+```sh
+sudo arxburn write arxos-0.0.1.iso --to sdc --scheme gpt   # protective MBR, UEFI sees GPT
+sudo arxburn write arxos-0.0.1.iso --to sdc --scheme mbr   # GPT headers cleared, BIOS sees MBR
+```
+
+Either one runs **after** the read back verification, never before. The stick is proved to match
+the image byte for byte first, and only then is the table deliberately changed, which is also why
+the change is reported as its own line rather than folded into the write.
+
+`--scheme gpt` on an image with no GPT is refused rather than performed: it would leave a stick
+that nothing can boot.
+
+## Keeping it current
+
+```sh
+arxburn update --check      # is there a newer release?
+sudo arxburn update         # download it, check its published hash, replace the binaries
+```
+
+The replacement is a rename over the old file, so there is never a moment where the tool is half
+written, and a download that does not match `SHA256SUMS` replaces nothing. The window has the
+same thing in its corner.
+
 ## Downloading
 
 `arxburn iso` lists what it knows about. `arxburn iso <id>` resolves that entry live and shows the

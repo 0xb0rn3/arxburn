@@ -52,6 +52,14 @@ fn resolve(id: String) -> Result<serde_json::Value, String> { one_shot(&["iso", 
 #[tauri::command]
 fn networks() -> Result<serde_json::Value, String> { one_shot(&["net"]) }
 
+/// What a firmware will make of an image: MBR, GPT, El Torito, and what that means for booting.
+#[tauri::command]
+fn inspect(path: String) -> Result<serde_json::Value, String> { one_shot(&["inspect", &path]) }
+
+/// Is there a newer release? Answered by the CLI, which owns the comparison.
+#[tauri::command]
+fn update_check() -> Result<serde_json::Value, String> { one_shot(&["update", "--check"]) }
+
 /// Images already on disk, so the common case (a file you downloaded yesterday) needs no typing.
 #[tauri::command]
 fn local_images() -> Vec<serde_json::Value> {
@@ -133,11 +141,20 @@ fn stream(app: AppHandle, state: State<'_, Running>, mut args: Vec<String>, priv
 
 #[tauri::command]
 fn start_burn(app: AppHandle, state: State<'_, Running>, image: String, device: String,
-              allow_internal: bool, verify: bool) -> Result<(), String> {
+              allow_internal: bool, verify: bool, scheme: String) -> Result<(), String> {
     let mut args = vec!["write".to_string(), image, "--to".into(), device, "--yes".into()];
     if allow_internal { args.push("--allow-internal".into()); }
     if !verify { args.push("--no-verify".into()); }
+    // the CLI applies this after the read back check, never before
+    if scheme == "gpt" || scheme == "mbr" { args.push("--scheme".into()); args.push(scheme); }
     stream(app, state, args, true)
+}
+
+/// Replace the installed binaries with the newest release. Needs root, so it goes through
+/// pkexec exactly like a burn does: no password is typed into this window.
+#[tauri::command]
+fn start_update(app: AppHandle, state: State<'_, Running>) -> Result<(), String> {
+    stream(app, state, vec!["update".into()], true)
 }
 
 #[tauri::command]
@@ -180,8 +197,8 @@ fn main() {
     tauri::Builder::default()
         .manage(Running::default())
         .invoke_handler(tauri::generate_handler![
-            devices, images, resolve, networks, local_images,
-            start_burn, start_download, cancel, version
+            devices, images, resolve, networks, local_images, inspect, update_check,
+            start_burn, start_download, start_update, cancel, version
         ])
         .run(tauri::generate_context!())
         .expect("arxburn GUI failed to start");

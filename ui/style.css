@@ -139,3 +139,15 @@ button{font:inherit;cursor:pointer;border-radius:var(--r-sm)}
 .log li.ok{color:var(--ok)}
 .log li.err{color:#ff9d93}
 .log li.step{color:var(--muted)}
+
+/* ---- partition scheme, image scheme line, update -------------------------------------------- */
+.scheme-line{margin-top:10px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.72rem;
+  color:var(--dim);line-height:1.5;min-height:1.1em}
+.scheme-line .yes{color:var(--ok)}
+.scheme-line .warn{color:var(--warn)}
+.opts{display:flex;flex-direction:column;gap:12px}
+.check.scheme{gap:12px}
+.check.scheme .k{font-size:.62rem}
+.check.scheme select{padding:7px 10px;font-size:.76rem;min-width:auto}
+.update{margin-top:10px;width:100%}
+.update.ready{border-color:rgba(232,112,42,.55);color:var(--accent)}

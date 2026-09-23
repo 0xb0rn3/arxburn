@@ -24,6 +24,7 @@ mod fetch;
 mod json;
 mod dev;
 mod net;
+mod parts;
 mod sha256;
 
 use std::fs::{File, OpenOptions};
@@ -64,6 +65,8 @@ fn main() {
     if args.iter().any(|a| a == "--json") { JSON.store(true, Ordering::Relaxed); }
     match args.get(1).map(String::as_str).unwrap_or("help") {
         "hash" => cmd_hash(&args[2..]),
+        "inspect" | "scheme" => cmd_inspect(&args[2..]),
+        "update" | "self-update" => cmd_update(&args[2..]),
         "net" | "networks" => {
             let n = fetch::networks();
             if json_mode() { json::line(&[("event", json::s("networks")), ("networks", json::V::Strs(n))]); }
@@ -93,6 +96,8 @@ fn usage() {
     println!("  arxburn get <id> [--to <device>]          download the newest, check it, burn it");
     println!("  arxburn write <image> --to <device|UUID>  burn a file you already have");
     println!("  arxburn verify <image> --to <device|UUID> re-check a stick burned earlier");
+    println!("  arxburn inspect <image|device>            MBR, GPT, and what will boot it");
+    println!("  arxburn update [--check]                  fetch the newest release and replace this");
     println!();
     println!("{BOLD}options{RST}");
     println!("  --to <dev|UUID>     target: sdc, /dev/sdc, or a partition UUID (UUID survives replugging)");
@@ -101,6 +106,7 @@ fn usage() {
     println!("  --yes               skip the typed confirmation (scripts)");
     println!("  --no-verify         skip the read-back check (not advised; it is the point)");
     println!("  --allow-internal    permit a non-removable disk. The running system stays refused.");
+    println!("  --scheme gpt|mbr    after verifying, leave the stick looking like one scheme");
     println!("  --loop              allow /dev/loopN targets, for testing against an image file");
     println!();
     println!("{DIM}  The disk carrying / is never a target. Mounted partitions are unmounted first,");
@@ -462,6 +468,137 @@ fn hash_device_prefix(path: &Path, len: u64, phase: Option<&'static str>) -> std
     Ok(sha256::hex(&h.finish()))
 }
 
+/// Read the first sectors of an image or a device and say what a firmware will make of it.
+fn head_of(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut f = File::open(path)?;
+    let mut buf = vec![0u8; 36 * 1024];
+    let mut filled = 0;
+    while filled < buf.len() {
+        match f.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(e),
+        }
+    }
+    buf.truncate(filled);
+    Ok(buf)
+}
+
+fn cmd_inspect(args: &[String]) {
+    let target = match args.first() {
+        Some(a) if !a.starts_with("--") => a.clone(),
+        _ => die("usage: arxburn inspect <image|device>"),
+    };
+    // a bare device name means the stick, not a file in the current directory
+    let path = if Path::new(&target).is_file() {
+        PathBuf::from(&target)
+    } else {
+        dev::resolve(&target, flag(args, "--loop")).map(|d| d.path)
+            .unwrap_or_else(|_| PathBuf::from(&target))
+    };
+    let head = head_of(&path).unwrap_or_else(|e| die(&format!("cannot read {}: {e}", path.display())));
+    let s = parts::read(&head);
+    if json_mode() {
+        let rows: Vec<Vec<(&'static str, json::V)>> = s.entries.iter().map(|e| vec![
+            ("type", json::V::N(e.kind as u64)),
+            ("type_name", json::s(e.kind_name())),
+            ("bootable", json::V::B(e.bootable)),
+            ("start_lba", json::V::N(e.start_lba as u64)),
+            ("sectors", json::V::N(e.sectors as u64)),
+        ]).collect();
+        json::line(&[("event", json::s("scheme")), ("path", json::s(path.to_string_lossy())),
+                     ("mbr", json::V::B(s.mbr)), ("gpt", json::V::B(s.gpt)),
+                     ("el_torito", json::V::B(s.el_torito)),
+                     ("efi_partition", json::V::B(s.efi_partition)),
+                     ("summary", json::s(s.summary())), ("boots", json::s(s.boots())),
+                     ("partitions", json::V::Arr(rows))]);
+        return;
+    }
+    step(&format!("{}", path.display()));
+    ok(&format!("{}", s.summary()));
+    println!("     {}", s.boots());
+    for (i, e) in s.entries.iter().enumerate() {
+        println!("  {DIM}{}{RST} {:<16} {:>12} sectors at LBA {:<10}{}", i + 1, e.kind_name(),
+            with_commas(e.sectors as u64), e.start_lba,
+            if e.bootable { format!(" {YEL}bootable{RST}") } else { String::new() });
+    }
+}
+
+const REPO: &str = "0xb0rn3/arxburn";
+
+/// Newest published version, or None when the release cannot be read.
+fn latest_release() -> Option<String> {
+    let body = net::text(&format!("https://api.github.com/repos/{REPO}/releases/latest")).ok()?;
+    let tag = body.split("\"tag_name\":").nth(1)?.split('"').nth(1)?.to_string();
+    Some(tag.trim_start_matches('v').to_string())
+}
+
+/// Compare two dotted versions numerically, so 0.10.0 is newer than 0.9.0.
+fn newer(a: &str, b: &str) -> bool {
+    let parts = |v: &str| v.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let (x, y) = (parts(a), parts(b));
+    for i in 0..x.len().max(y.len()) {
+        let (l, r) = (*x.get(i).unwrap_or(&0), *y.get(i).unwrap_or(&0));
+        if l != r { return l > r; }
+    }
+    false
+}
+
+fn cmd_update(args: &[String]) {
+    let here = env!("CARGO_PKG_VERSION");
+    let latest = match latest_release() {
+        Some(v) => v,
+        None => {
+            if json_mode() {
+                json::line(&[("event", json::s("update")), ("error", json::s("cannot reach the release feed"))]);
+                return;
+            }
+            die("cannot reach the release feed");
+        }
+    };
+    let available = newer(&latest, here);
+    if json_mode() {
+        json::line(&[("event", json::s("update")), ("current", json::s(here)),
+                     ("latest", json::s(&latest)), ("available", json::V::B(available))]);
+    } else if available {
+        ok(&format!("{latest} is available (you have {here})"));
+    } else {
+        ok(&format!("{here} is the newest release"));
+    }
+    if flag(args, "--check") || !available { return; }
+
+    // replace the binaries in place, but only after each download matches its published hash
+    let exe = std::env::current_exe().unwrap_or_else(|e| die(&format!("cannot find myself: {e}")));
+    let dir = exe.parent().unwrap_or(Path::new("/usr/bin")).to_path_buf();
+    if OpenOptions::new().append(true).open(&exe).is_err() {
+        die("this needs to write where arxburn is installed: run it with sudo");
+    }
+    let base = format!("https://github.com/{REPO}/releases/latest/download");
+    let sums = net::text(&format!("{base}/SHA256SUMS")).unwrap_or_else(|e| die(&e));
+
+    for (asset, dest) in [("arxburn-x86_64-linux", exe.clone()),
+                          ("arxburn-gui-x86_64-linux", dir.join("arxburn-gui"))] {
+        if !dest.exists() { continue; }          // only replace what is actually installed
+        let want = sums.lines().find(|l| l.ends_with(asset))
+            .and_then(|l| l.split_whitespace().next()).map(str::to_string);
+        let Some(want) = want else { no(&format!("no published hash for {asset}, skipped")); continue };
+        let tmp = dest.with_extension("new");
+        step(&format!("downloading {asset}"));
+        if let Err(e) = net::download(&format!("{base}/{asset}"), &tmp) { let _ = std::fs::remove_file(&tmp); die(&e); }
+        let (got, _) = hash_file(&tmp, None).unwrap_or_else(|e| die(&format!("cannot read the download: {e}")));
+        if got != want {
+            let _ = std::fs::remove_file(&tmp);
+            die(&format!("{asset} does not match its published sha256; nothing was replaced"));
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+        // rename over the old one: atomic on the same filesystem, so there is never a moment
+        // where the tool is half replaced
+        std::fs::rename(&tmp, &dest).unwrap_or_else(|e| die(&format!("cannot replace {}: {e}", dest.display())));
+        ok(&format!("{} updated", dest.display()));
+    }
+}
+
 fn cmd_hash(args: &[String]) {
     let p = match args.first() {
         Some(a) if !a.starts_with("--") => PathBuf::from(a),
@@ -501,6 +638,16 @@ fn burn(image: &Path, target: &str, args: &[String], known: Option<(String, u64)
     if json_mode() {
         json::line(&[("event", json::s("target")), ("device", json::s(d.path.to_string_lossy())),
                      ("size", json::V::N(d.size)), ("image_size", json::V::N(img_len_meta))]);
+    }
+
+    if let Ok(head) = head_of(image) {
+        let sc = parts::read(&head);
+        step(&format!("image is {}: {}", sc.summary(), sc.boots()));
+        if json_mode() {
+            json::line(&[("event", json::s("image_scheme")), ("summary", json::s(sc.summary())),
+                         ("boots", json::s(sc.boots())), ("mbr", json::V::B(sc.mbr)),
+                         ("gpt", json::V::B(sc.gpt))]);
+        }
     }
 
     if let Some(reason) = d.refusal(allow_internal) { die(&format!("refusing {}: {reason}", d.path.display())); }
@@ -567,6 +714,7 @@ fn burn(image: &Path, target: &str, args: &[String], known: Option<(String, u64)
         no("verification skipped (--no-verify): nothing proves the stick matches the image");
         return;
     }
+    let scheme_choice = opt(args, "--scheme");
     step("verifying: reading the bytes back off the device");
     drop_caches();
     let back = hash_device_prefix(&d.path, written, Some("verify"))
@@ -578,6 +726,10 @@ fn burn(image: &Path, target: &str, args: &[String], known: Option<(String, u64)
                          ("sha256", json::s(&back)), ("bytes", json::V::N(written))]);
         } else {
             println!("  {DIM}sha256 {back}{RST}");
+        }
+        // only now, with the copy proved, is the partition table deliberately changed
+        if let Some(want) = scheme_choice {
+            apply_scheme(&d, &want);
         }
     } else {
         no(&format!("MISMATCH: do not boot this\n     image  {img_hash}\n     device {back}"));
@@ -660,6 +812,52 @@ fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Dur
     }
     meter.finish(written.load(Ordering::Relaxed));
     (sha256::hex(&hasher.finish()), read_total, started.elapsed())
+}
+
+/// Leave the stick looking like one scheme or the other.
+///
+/// This runs AFTER the read back verification, never before: the point of the verification is
+/// that the stick matches the image byte for byte, and this changes bytes on purpose. Doing it
+/// in the other order would make the proof meaningless.
+fn apply_scheme(d: &dev::Device, want: &str) {
+    let head = head_of(&d.path).unwrap_or_else(|e| die(&format!("cannot read back {}: {e}", d.path.display())));
+    let s = parts::read(&head);
+    let sectors = d.size / parts::SECTOR as u64;
+    let mut f = OpenOptions::new().write(true).open(&d.path)
+        .unwrap_or_else(|e| die(&format!("open {}: {e}", d.path.display())));
+    match want {
+        "mbr" => {
+            if !s.gpt {
+                ok("already MBR only; nothing to change");
+                return;
+            }
+            // clear the primary GPT header and its backup at the last sector: the MBR that the
+            // image wrote stays exactly as it is, so BIOS booting is untouched
+            let zero = vec![0u8; parts::SECTOR];
+            f.seek(SeekFrom::Start(parts::SECTOR as u64)).and_then(|_| f.write_all(&zero))
+                .unwrap_or_else(|e| die(&format!("cannot clear the GPT header: {e}")));
+            if sectors > 1 {
+                let last = (sectors - 1) * parts::SECTOR as u64;
+                let _ = f.seek(SeekFrom::Start(last)).and_then(|_| f.write_all(&zero));
+            }
+            f.sync_all().ok();
+            ok("scheme: MBR (the GPT headers were cleared; BIOS boot is untouched)");
+        }
+        "gpt" => {
+            if !s.gpt {
+                die("this image has no GPT, so there is nothing to keep: writing a protective MBR \
+                     would leave a stick that no firmware can boot. Leave it as it is, or write an \
+                     image that carries a GPT.");
+            }
+            let pm = parts::protective_mbr(sectors);
+            f.seek(SeekFrom::Start(0)).and_then(|_| f.write_all(&pm))
+                .unwrap_or_else(|e| die(&format!("cannot write the protective MBR: {e}")));
+            f.sync_all().ok();
+            ok("scheme: GPT (sector 0 is now a protective MBR; UEFI boot is untouched)");
+        }
+        "auto" | "hybrid" => ok(&format!("scheme: left as the image wrote it ({})", s.summary())),
+        other => die(&format!("unknown scheme '{other}': use gpt, mbr or auto")),
+    }
 }
 
 fn cmd_verify(args: &[String]) {

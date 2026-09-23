@@ -77,6 +77,7 @@ async function loadLocal() {
       picked.image = f.path;
       [...list.children].forEach((x) => x.classList.remove("picked"));
       li.classList.add("picked");
+      showScheme(f.path);
       ready();
     };
     list.appendChild(li);
@@ -86,6 +87,20 @@ async function loadLocal() {
     li.className = "empty";
     li.textContent = "No .iso or .img found in Downloads or your home. Type a path above, or fetch one from Images.";
     list.appendChild(li);
+  }
+}
+
+// What will actually boot from this image. Asked of the CLI, which reads the sectors.
+async function showScheme(path) {
+  const el = $("image-scheme");
+  if (!path) { el.textContent = ""; return; }
+  el.textContent = "reading the first sectors…";
+  try {
+    const r = await invoke("inspect", { path });
+    const cls = r.boots && r.boots.startsWith("hybrid") ? "yes" : "warn";
+    el.innerHTML = `${r.summary} &middot; <span class="${cls}">${r.boots}</span>`;
+  } catch (e) {
+    el.innerHTML = `<span class="warn">${String(e)}</span>`;
   }
 }
 
@@ -198,9 +213,12 @@ listen("arxburn", (e) => {
 $("burn-btn").onclick = async () => {
   ready();
   if (!picked.image || !picked.device) return;
+  const scheme = $("scheme").value;
+  const schemeNote = scheme === "auto" ? ""
+    : `\n\nAfter verifying, the stick will be left looking like ${scheme.toUpperCase()}.`;
   const sure = confirm(
     `This erases /dev/${picked.device} completely and cannot be undone.\n\n` +
-    `Write ${picked.image}?`);
+    `Write ${picked.image}?` + schemeNote);
   if (!sure) return;
   $("log").innerHTML = "";
   showProgress("starting");
@@ -209,6 +227,7 @@ $("burn-btn").onclick = async () => {
     await invoke("start_burn", {
       image: picked.image, device: picked.device,
       allowInternal: picked.allowInternal, verify: $("verify").checked,
+      scheme: $("scheme").value,
     });
   } catch (e) { log(String(e), "err"); hideProgress(); }
 };
@@ -217,7 +236,12 @@ $("cancel").onclick = async () => {
   try { await invoke("cancel"); log("stopped", "err"); } catch (e) { log(String(e), "err"); }
 };
 $("refresh").onclick = () => { loadDevices(); loadLocal(); };
-$("image-path").oninput = ready;
+let schemeTimer = null;
+$("image-path").oninput = () => {
+  ready();
+  clearTimeout(schemeTimer);
+  schemeTimer = setTimeout(() => showScheme($("image-path").value.trim()), 500);
+};
 $("search").oninput = renderImages;
 $("family").onchange = renderImages;
 
@@ -230,6 +254,37 @@ document.querySelectorAll(".nav-item").forEach((tab) => {
     if (tab.dataset.tab === "images" && !images.length) loadImages();
   };
 });
+
+// Updates: the CLI owns the version comparison and the hash check, this only asks and reports.
+let updateReady = false;
+$("update-btn").onclick = async () => {
+  const b = $("update-btn");
+  if (updateReady) {
+    if (!confirm("Replace the installed arxburn with the newest release?")) return;
+    b.textContent = "updating…";
+    log("downloading the newest release", "step");
+    try { await invoke("start_update"); } catch (e) { log(String(e), "err"); b.textContent = "Check for updates"; }
+    return;
+  }
+  b.textContent = "checking…";
+  try {
+    const r = await invoke("update_check");
+    if (r.error) { log(r.error, "err"); b.textContent = "Check for updates"; return; }
+    if (r.available) {
+      updateReady = true;
+      b.textContent = `Update to ${r.latest}`;
+      b.classList.add("ready");
+      log(`${r.latest} is available (you have ${r.current})`, "ok");
+    } else {
+      b.textContent = "Up to date";
+      log(`${r.current} is the newest release`, "ok");
+      setTimeout(() => { b.textContent = "Check for updates"; }, 4000);
+    }
+  } catch (e) {
+    log(String(e), "err");
+    b.textContent = "Check for updates";
+  }
+};
 
 (async () => {
   // the deck foot carries what the engine says about itself: version, hash engine, block size
