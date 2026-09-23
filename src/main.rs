@@ -644,16 +644,35 @@ fn cmd_update(args: &[String]) {
 fn cmd_hash(args: &[String]) {
     let p = match args.first() {
         Some(a) if !a.starts_with("--") => PathBuf::from(a),
-        _ => die("usage: arxburn hash <file>"),
+        _ => die("usage: arxburn hash <file> [--expect <sha256>]"),
     };
-    let quiet = json_mode();
-    let (h, n) = hash_file(&p, if quiet { None } else { Some("hash") })
+    // Always metered, including under --json. Hashing a 4GB image takes the better part of a
+    // minute, and a window told nothing for a minute is a window that looks broken.
+    let (h, n) = hash_file(&p, Some("hash"))
         .unwrap_or_else(|e| die(&format!("cannot read {}: {e}", p.display())));
+
+    // What somebody actually wants to know: does this file match the hash the project published?
+    let expect = opt(args, "--expect").map(|e| e.trim().to_ascii_lowercase());
+    let verdict = expect.as_ref().map(|e| e == &h);
+
     if json_mode() {
-        json::line(&[("event", json::s("hash")), ("sha256", json::s(h)), ("size", json::V::N(n)),
-                     ("engine", json::s(sha256::engine()))]);
+        let mut f: Vec<(&str, json::V)> = vec![
+            ("event", json::s("hash")), ("sha256", json::s(&h)), ("size", json::V::N(n)),
+            ("engine", json::s(sha256::engine())), ("path", json::s(p.to_string_lossy())),
+        ];
+        if let Some(e) = &expect { f.push(("expected", json::s(e))); }
+        if let Some(v) = verdict { f.push(("matches", json::V::B(v))); }
+        json::line(&f);
     } else {
         println!("  {h}  {}  ({} bytes, {})", p.display(), with_commas(n), sha256::engine());
+    }
+    match verdict {
+        Some(true) => ok("matches the hash you gave"),
+        Some(false) => {
+            no(&format!("DOES NOT MATCH\n     you gave  {}\n     this file {h}", expect.unwrap_or_default()));
+            exit(1);
+        }
+        None => {}
     }
 }
 

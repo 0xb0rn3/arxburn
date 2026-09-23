@@ -155,3 +155,29 @@ button{font:inherit;cursor:pointer;border-radius:var(--r-sm)}
 /* the progress card and log sit under whichever panel is open, never inside one */
 .stage > .progress, .stage > .log{margin-top:4px}
 .stage > .progress{position:sticky;bottom:12px;z-index:3}
+/* the card is sticky so it stays visible over a long list; on a short panel that means it would
+   sit on top of the last row, so the stage makes room for it while it is showing */
+.stage.has-progress{padding-bottom:170px}
+
+/* ---- verify ------------------------------------------------------------------------------ */
+.verify-out{margin-top:12px;font-size:.78rem;line-height:1.6;color:var(--dim);word-break:break-all;min-height:1.2em}
+.verify-out .sha{color:var(--fg);display:block;margin-top:4px}
+.verify-out.good{color:var(--ok)}
+.verify-out.bad{color:#ff9d93}
+
+/* ---- the dialog --------------------------------------------------------------------------- */
+/* Still, like the rest of this window: it appears, it does not perform. */
+.dialog{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  background:rgba(6,6,9,.68);padding:24px}
+.dialog.hidden{display:none}
+.dialog-card{width:min(460px,100%);background:linear-gradient(158deg,#23242b,#1a1b21);
+  border:1px solid var(--glass-br);border-radius:var(--r);box-shadow:var(--glass-hi),0 24px 70px rgba(0,0,0,.6);
+  padding:28px;text-align:center}
+.dialog-mark{width:52px;height:52px;margin:0 auto 16px;border-radius:50%;display:flex;
+  align-items:center;justify-content:center;font-size:1.5rem;color:#fff;
+  background:linear-gradient(160deg,var(--ok),#3da864);box-shadow:0 8px 24px rgba(78,195,122,.34)}
+.dialog-mark.bad{background:linear-gradient(160deg,#e5544b,#c33e36);box-shadow:0 8px 24px rgba(229,84,75,.34)}
+.dialog-card h2{font-size:1.5rem;line-height:1.15}
+.dialog-card p{color:var(--muted);margin-top:9px;font-size:.92rem;line-height:1.5}
+.dialog-card .mono{margin-top:14px;font-size:.68rem;color:var(--dim);word-break:break-all;line-height:1.5}
+.dialog-card button{margin-top:22px;width:100%}

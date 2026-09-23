@@ -196,6 +196,18 @@ fn start_download(app: AppHandle, state: State<'_, Running>, id: String, out: St
     stream(app, state, vec!["get".into(), id, "--out".into(), out], false)
 }
 
+/// Hash a file, optionally against a hash the person pasted from the project's download page.
+/// Unprivileged: reading a file somebody already has needs no password.
+#[tauri::command]
+fn start_hash(app: AppHandle, state: State<'_, Running>, path: String, expect: String)
+    -> Result<(), String>
+{
+    let mut args = vec!["hash".into(), path];
+    let e = expect.trim().to_string();
+    if !e.is_empty() { args.push("--expect".into()); args.push(e); }
+    stream(app, state, args, false)
+}
+
 #[tauri::command]
 fn cancel(state: State<'_, Running>) -> Result<(), String> {
     let mut slot = state.0.lock().unwrap();
@@ -232,7 +244,7 @@ fn main() {
         .manage(Running::default())
         .invoke_handler(tauri::generate_handler![
             devices, images, resolve, networks, local_images, inspect, update_check,
-            start_burn, start_download, start_update, cancel, version
+            start_burn, start_download, start_update, start_hash, cancel, version
         ])
         .run(tauri::generate_context!())
         .expect("arxburn GUI failed to start");

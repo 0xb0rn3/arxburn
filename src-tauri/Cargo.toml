@@ -1,6 +1,6 @@
 [package]
 name = "arxburn-gui"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "arxburn GUI: write an image to a USB stick, and watch every byte land"
 authors = ["0xb0rn3"]

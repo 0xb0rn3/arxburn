@@ -28,6 +28,7 @@ arxburn iso                           # images it can fetch, ours and everyone e
 arxburn get arch --to sdc             # download the newest Arch, check it, burn it, verify it
 arxburn write arxos-0.0.1.iso --to sdc
 arxburn verify arxos-0.0.1.iso --to sdc
+arxburn hash arxos-0.0.1.iso --expect 18d87568b4e2...   # is this the file they published?
 ```
 
 ### Removing it
@@ -177,12 +178,22 @@ The window runs the same `arxburn` binary underneath and shows what it prints, s
 the unmounting and the verification are decided in one place. A burn goes through `pkexec`, so no
 password is ever typed into the window.
 
+Three panels: **Burn**, **Images**, and **Verify**. Verify is the sha256 check on its own, for a
+file you already have: pick it, paste the sha256 from the project's download page, and it reads
+the whole file and tells you whether the two agree. It reports about 240 MB/s here, so a 4GB
+image takes around twenty seconds.
+
+Anything that finishes ends in a dialog that says which way it went, with a sound, because a burn
+is watched for a few minutes and then walked away from. Green and two rising notes means the
+bytes are verified. Red and two falling notes means they are not, and the dialog says what to do
+about it.
+
 ## Options
 
 | option | meaning |
 | --- | --- |
 | `--to <dev\|UUID>` | `sdc`, `/dev/sdc`, or a filesystem UUID of one of its partitions |
-| `--expect <sha256>` | verify the image against a published hash before writing |
+| `--expect <sha256>` | check the image against a published hash (on `write`, before writing; on `hash`, as the whole point) |
 | `--out <dir>` | where downloads land (default: the current directory) |
 | `--yes` | skip the typed confirmation, for scripts |
 | `--no-verify` | skip the read-back check (not advised) |

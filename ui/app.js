@@ -173,13 +173,59 @@ async function homeDir() {
 
 function showProgress(phase) {
   $("progress").classList.remove("hidden");
+  document.querySelector(".stage").classList.add("has-progress");
   $("phase").textContent = phase;
   $("bar-fill").style.width = "0%";
   $("bytes").textContent = "0";
   $("rate").textContent = "";
   $("eta").textContent = "";
 }
-function hideProgress() { $("progress").classList.add("hidden"); }
+function hideProgress() {
+  $("progress").classList.add("hidden");
+  document.querySelector(".stage").classList.remove("has-progress");
+}
+
+// ---- the ending -------------------------------------------------------------------------
+// A burn is watched for minutes and then walked away from. The sound is so somebody in the next
+// room knows it finished; the dialog is so they know WHICH way it finished.
+function ping(good) {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    // two notes up for success, two down for a mismatch: recognisable without looking
+    const notes = good ? [880, 1318.5] : [440, 311.1];
+    notes.forEach((hz, i) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = hz;
+      const t = ctx.currentTime + i * 0.13;
+      // a short envelope, because an abrupt stop on a sine is an audible click
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.32);
+    });
+    setTimeout(() => ctx.close().catch(() => {}), 900);
+  } catch (_) { /* no audio device is not a failure worth reporting */ }
+}
+
+function dialog(good, title, body, hash) {
+  $("dialog-mark").textContent = good ? "\u2713" : "!";
+  $("dialog-mark").className = "dialog-mark" + (good ? "" : " bad");
+  $("dialog-title").textContent = title;
+  $("dialog-body").textContent = body;
+  $("dialog-hash").textContent = hash || "";
+  $("dialog").classList.remove("hidden");
+  ping(good);
+  $("dialog-close").focus();
+}
+$("dialog-close").onclick = () => $("dialog").classList.add("hidden");
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("dialog").classList.add("hidden");
+});
 
 listen("arxburn", (e) => {
   const m = e.payload || {};
@@ -212,6 +258,49 @@ listen("arxburn", (e) => {
       hideProgress();
       log(m.verified ? `verified: the disk carries the image, byte for byte (${m.sha256})`
                      : `MISMATCH: do not boot this disk`, m.verified ? "ok" : "err");
+      dialog(m.verified,
+        m.verified ? "Written and verified" : "It did not match",
+        m.verified
+          ? `The disk was read back and every byte matches the image. It is safe to boot.`
+          : `What was read back off the disk is not what the image contains. Do not boot it; write it again, and if it fails twice the stick is probably failing.`,
+        m.sha256 ? `sha256 ${m.sha256}` : "");
+      loadLocal();
+      break;
+
+    // a hash run, from the Verify panel
+    case "hash": {
+      hideProgress();
+      const out = $("verify-out");
+      const short = `${m.sha256}`;
+      if (m.matches === true) {
+        out.className = "verify-out good";
+        out.innerHTML = `This is the file the project published.<span class="sha">${short}</span>`;
+        dialog(true, "It matches",
+          "The sha256 you pasted and the one computed from this file are the same, so the download is intact and unaltered.",
+          `sha256 ${short}`);
+      } else if (m.matches === false) {
+        out.className = "verify-out bad";
+        out.innerHTML = `This is NOT the file that hash describes.
+          <span class="sha">computed ${short}</span><span class="sha">you gave ${m.expected}</span>`;
+        dialog(false, "It does not match",
+          "The file on disk hashes to something else. Either the download was corrupted or truncated, or it is not the file that hash belongs to. Download it again before writing it to anything.",
+          `computed ${short}`);
+      } else {
+        out.className = "verify-out";
+        out.innerHTML = `${human(m.size)}, read with the ${m.engine} engine.<span class="sha">${short}</span>`;
+        dialog(true, "Hashed",
+          "Compare this against the sha256 on the project's download page. If they are the same, the file is intact.",
+          `sha256 ${short}`);
+      }
+      break;
+    }
+
+    // a download that finished without being written anywhere
+    case "ready":
+      hideProgress();
+      dialog(true, "Downloaded",
+        `It is on disk and its hash was checked. Pick it in Burn to write it to a stick.`,
+        m.path || "");
       loadLocal();
       break;
     case "finished":
@@ -244,7 +333,7 @@ $("burn-btn").onclick = async () => {
   try {
     await invoke("start_burn", {
       image: picked.image, device: picked.device,
-      allowInternal: picked.allowInternal, verify: $("verify").checked,
+      allowInternal: picked.allowInternal, verify: $("verify-readback").checked,
       scheme: $("scheme").value,
     });
   } catch (e) { log(String(e), "err"); hideProgress(); }
@@ -254,6 +343,48 @@ $("cancel").onclick = async () => {
   try { await invoke("cancel"); log("stopped", "err"); } catch (e) { log(String(e), "err"); }
 };
 $("refresh").onclick = () => { loadDevices(); loadLocal(); };
+
+// ---- verify ---------------------------------------------------------------------------------
+async function loadVerifyList() {
+  const list = $("verify-list");
+  list.innerHTML = "";
+  const files = await invoke("local_images");
+  for (const f of files) {
+    const li = document.createElement("li");
+    li.innerHTML = `<div><div class="name">${f.name}</div><div class="meta">${f.path}</div></div>
+      <span class="side meta">${human(f.size)}</span>`;
+    li.onclick = () => {
+      $("verify-path").value = f.path;
+      [...list.children].forEach((x) => x.classList.remove("picked"));
+      li.classList.add("picked");
+    };
+    list.appendChild(li);
+  }
+  if (!files.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "No .iso or .img found. Type a path above.";
+    list.appendChild(li);
+  }
+}
+
+$("verify-btn").onclick = async () => {
+  const path = $("verify-path").value.trim();
+  if (!path) { $("verify-out").className = "verify-out bad";
+               $("verify-out").textContent = "Pick a file first."; return; }
+  const expect = $("verify-expect").value.trim();
+  $("verify-out").className = "verify-out";
+  $("verify-out").textContent = "reading the whole file…";
+  $("log").innerHTML = "";
+  showProgress("hash");
+  try {
+    await invoke("start_hash", { path, expect });
+  } catch (e) {
+    hideProgress();
+    $("verify-out").className = "verify-out bad";
+    $("verify-out").textContent = String(e);
+  }
+};
 let schemeTimer = null;
 $("image-path").oninput = () => {
   ready();
@@ -270,6 +401,7 @@ document.querySelectorAll(".nav-item").forEach((tab) => {
     tab.classList.add("active");
     $(tab.dataset.tab).classList.add("active");
     if (tab.dataset.tab === "images" && !images.length) loadImages();
+    if (tab.dataset.tab === "verify") loadVerifyList();
   };
 });
 
