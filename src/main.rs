@@ -612,8 +612,15 @@ fn cmd_update(args: &[String]) {
     // replace the binaries in place, but only after each download matches its published hash
     let exe = std::env::current_exe().unwrap_or_else(|e| die(&format!("cannot find myself: {e}")));
     let dir = exe.parent().unwrap_or(Path::new("/usr/bin")).to_path_buf();
-    if OpenOptions::new().append(true).open(&exe).is_err() {
-        die("this needs to write where arxburn is installed: run it with sudo");
+    // What replacing a binary actually needs is write permission on its DIRECTORY, because the
+    // swap is a rename, not a write. Testing it by opening the binary itself could never work:
+    // the kernel answers ETXTBSY, "text file busy", for a write-open of a running executable, and
+    // it answers that to root as well. So the old check failed for everybody and then blamed
+    // permissions, which is why running it under sudo changed nothing.
+    let probe = dir.join(".arxburn-update-probe");
+    match std::fs::File::create(&probe) {
+        Ok(_) => { let _ = std::fs::remove_file(&probe); }
+        Err(e) => die(&format!("cannot write to {}: {e}\n     run it with sudo", dir.display())),
     }
     let base = format!("https://github.com/{REPO}/releases/latest/download");
     let sums = net::text(&format!("{base}/SHA256SUMS")).unwrap_or_else(|e| die(&e));
