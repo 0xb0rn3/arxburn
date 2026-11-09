@@ -665,15 +665,44 @@ fn latest_release() -> Option<String> {
     Some(tag.trim_start_matches('v').to_string())
 }
 
-/// Compare two dotted versions numerically, so 0.10.0 is newer than 0.9.0.
+/// Compare two versions: the dotted numbers numerically (0.10.0 is newer than 0.9.0), then the
+/// release after a dash, which counts minor fixes on one version: 0.1.8 = 0.1.8-0 < 0.1.8-1 <
+/// 0.1.8-2 < 0.1.9. The dash used to make the whole last part unparseable, so 0.1.8-1 read as
+/// 0.1.0: the fix was never offered, and someone on it was told 0.1.8 was newer.
 fn newer(a: &str, b: &str) -> bool {
-    let parts = |v: &str| v.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
-    let (x, y) = (parts(a), parts(b));
+    fn key(v: &str) -> (Vec<u64>, u64) {
+        let (dotted, release) = v.split_once('-').unwrap_or((v, "0"));
+        let nums = dotted.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect();
+        (nums, release.parse::<u64>().unwrap_or(0))
+    }
+    let ((x, xr), (y, yr)) = (key(a), key(b));
     for i in 0..x.len().max(y.len()) {
         let (l, r) = (*x.get(i).unwrap_or(&0), *y.get(i).unwrap_or(&0));
         if l != r { return l > r; }
     }
-    false
+    xr > yr
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::newer;
+
+    #[test]
+    fn dotted_parts_compare_as_numbers() {
+        assert!(newer("0.10.0", "0.9.0"));
+        assert!(newer("0.1.9", "0.1.8"));
+        assert!(!newer("0.1.8", "0.1.8"));
+    }
+
+    #[test]
+    fn a_minor_fix_release_is_newer_and_never_a_way_back() {
+        assert!(newer("0.1.8-1", "0.1.8"), "a -1 fix is offered to 0.1.8");
+        assert!(newer("0.1.8-2", "0.1.8-1"));
+        assert!(!newer("0.1.8", "0.1.8-1"), "0.1.8 must not look newer than its own fix");
+        assert!(!newer("0.1.8-0", "0.1.8") && !newer("0.1.8", "0.1.8-0"), "-0 is the plain version");
+        assert!(newer("0.1.9", "0.1.8-7"), "the next version beats any fix of the last");
+        assert!(newer("0.1.10-0", "0.1.9-3"));
+    }
 }
 
 fn cmd_update(args: &[String]) {
