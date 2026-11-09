@@ -66,7 +66,7 @@ pub fn builtin() -> Vec<Iso> {
     vec![
         // ---- ours -------------------------------------------------------------------------
         e("arxos", "ArxOS 0.0.1", Family::Linux, "our own release, hash published with it",
-          Source::Direct("https://pub-d5ff3efb1d204998aa120ded02d070b9.r2.dev/arxos-0.0.1.iso".into()), None),
+          Source::Archive("arxos-0.0.1-slim".into()), None),
 
         // ---- rolling and bleeding edge ----------------------------------------------------
         e("arch", "Arch Linux", Family::Linux, "monthly rolling snapshot",
