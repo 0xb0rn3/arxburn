@@ -77,8 +77,10 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opa
 .card{background:var(--glass);border:1px solid var(--glass-br);border-radius:var(--r);
   box-shadow:var(--glass-hi),var(--shadow);padding:18px;margin-bottom:16px}
 .card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px;min-height:26px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
-@media (max-width:920px){.grid{grid-template-columns:1fr}}
+/* minmax(0,1fr), not 1fr: a plain 1fr column cannot shrink below its content, so one long file
+   name widened the image card and pushed the disk card, Look again included, out of the window */
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:920px){.grid{grid-template-columns:minmax(0,1fr)}}
 
 input[type=text],select{width:100%;padding:10px 12px;background:rgba(0,0,0,.28);color:var(--fg);
   border:1px solid var(--faint);border-radius:var(--r-sm);font-size:.84rem;
@@ -91,7 +93,7 @@ select{appearance:none;width:auto;min-width:170px;font-family:'Inter',system-ui,
 /* ---- rows ------------------------------------------------------------------------------ */
 .rows{list-style:none;margin:12px 0 0;padding:0;max-height:270px;overflow-y:auto}
 .rows.wide{max-height:none;margin-top:0}
-.rows li{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;
+.rows li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;
   padding:11px 13px;border:1px solid var(--faint);border-radius:var(--r-sm);
   background:rgba(255,255,255,.028);margin-bottom:8px;cursor:pointer}
 .rows li.picked{border-color:rgba(232,112,42,.6);background:var(--accent-soft)}
@@ -100,7 +102,12 @@ select{appearance:none;width:auto;min-width:170px;font-family:'Inter',system-ui,
 .rows .name{font-size:.92rem;font-weight:600;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .rows .name .model{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.7rem;font-weight:400;color:var(--dim)}
 .rows .meta{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.72rem;color:var(--dim);margin-top:3px}
+/* names and paths have no spaces to break at; let them wrap anywhere rather than widen the card */
+.rows .name,.rows .meta,.scheme-line{overflow-wrap:anywhere;min-width:0}
 .rows .side{text-align:right;font-size:.72rem;max-width:20ch}
+/* an image's size cell: the size, and under it what a compressed one unpacks to, never wrapped */
+.rows .side.size{max-width:none;white-space:nowrap;margin-top:0}
+.rows .side.size .sub{display:block;margin-top:3px;font-size:.66rem;color:var(--dim)}
 .tag{display:inline-block;padding:3px 9px;border-radius:999px;font-size:.64rem;font-weight:600;
   letter-spacing:.06em;text-transform:uppercase;border:1px solid transparent;white-space:nowrap}
 .tag.sys{color:#fff;background:rgba(229,84,75,.22);border-color:rgba(229,84,75,.5)}
@@ -141,12 +148,28 @@ button{font:inherit;cursor:pointer;border-radius:var(--r-sm)}
 .log li.ok{color:var(--ok)}
 .log li.err{color:#ff9d93}
 .log li.step{color:var(--muted)}
+.log li.warn{color:var(--warn)}
 
 /* ---- partition scheme, image scheme line, update -------------------------------------------- */
 .scheme-line{margin-top:10px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.72rem;
   color:var(--dim);line-height:1.5;min-height:1.1em}
 .scheme-line .yes{color:var(--ok)}
-.scheme-line .warn{color:var(--warn)}
+/* in-line caution text; not ".warn", which is the boxed flush warning and drew a box mid-sentence */
+.caution{color:var(--warn)}
+.scheme-line .bad{color:#ff9d93}
+.scheme-line .what{color:var(--muted)}
+/* an image found on a mounted USB drive: worth knowing before you pick that drive as the target */
+.tag.ext{color:var(--accent-hi);background:var(--accent-soft);border-color:rgba(232,112,42,.4)}
+
+/* ---- a file held over the window --------------------------------------------------------- */
+.drop{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;
+  padding:28px;background:rgba(6,6,9,.6);pointer-events:none}
+.drop.hidden{display:none}
+.drop-card{width:min(520px,100%);padding:34px 30px;text-align:center;border-radius:var(--r);
+  border:2px dashed rgba(232,112,42,.7);background:linear-gradient(158deg,#26272e,#1c1d23);
+  box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.drop-card .pf{font-size:1.6rem}
+.drop-card p{color:var(--muted);margin-top:10px;font-size:.88rem;line-height:1.5}
 .opts{display:flex;flex-direction:column;gap:12px}
 .check.scheme{gap:12px}
 .check.scheme .k{font-size:.62rem}

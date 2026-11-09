@@ -44,6 +44,10 @@ fn cli() -> String {
 }
 
 /// One-shot commands: run it, hand back the single JSON line it printed.
+///
+/// A refusal comes back as an `error` event on stdout, not as a crash, so it is turned into an
+/// Err here. Handed back as an ordinary answer it used to reach the window as a result with every
+/// field missing, and a file that could not be read showed as "undefined · undefined".
 fn one_shot(args: &[&str]) -> Result<serde_json::Value, String> {
     let out = Command::new(cli()).args(args).arg("--json").output()
         .map_err(|e| format!("cannot run arxburn: {e}"))?;
@@ -53,7 +57,17 @@ fn one_shot(args: &[&str]) -> Result<serde_json::Value, String> {
             let err = String::from_utf8_lossy(&out.stderr);
             if err.trim().is_empty() { "arxburn said nothing".to_string() } else { err.trim().to_string() }
         })?;
-    serde_json::from_str(last).map_err(|e| format!("cannot read arxburn's answer: {e}"))
+    let v: serde_json::Value = serde_json::from_str(last).map_err(|e| format!("cannot read arxburn's answer: {e}"))?;
+    if v["event"] == "error" {
+        return Err(v["message"].as_str().unwrap_or("arxburn refused").to_string());
+    }
+    Ok(v)
+}
+
+/// A path handed to a job must be absolute. The window has no meaningful working directory, so a
+/// relative path would be resolved somewhere the person never chose.
+fn absolute(path: &str, what: &str) -> Result<(), String> {
+    if path.starts_with('/') { Ok(()) } else { Err(format!("give the full path of the {what}, starting with /")) }
 }
 
 #[tauri::command]
@@ -77,30 +91,46 @@ fn inspect(path: String) -> Result<serde_json::Value, String> { one_shot(&["insp
 fn update_check() -> Result<serde_json::Value, String> { one_shot(&["update", "--check"]) }
 
 /// Images already on disk, so the common case (a file you downloaded yesterday) needs no typing.
+///
+/// Asked of the CLI, which decides by CONTENT: it reads each candidate's first sectors, looks
+/// inside .xz/.zst/.gz/.bz2, searches Desktop, Downloads, ~/iso, the home folder and any mounted
+/// USB drive, and lists only what it would actually write. This used to be a filename match on
+/// .iso/.img in four folders here, which offered a qcow2 renamed .img and missed every
+/// compressed image.
 #[tauri::command]
-fn local_images() -> Vec<serde_json::Value> {
-    let mut out = Vec::new();
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dirs = [format!("{home}/Downloads"), format!("{home}/iso"), format!("{home}"),
-                std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default()];
-    for dir in dirs.iter().filter(|d| !d.is_empty()) {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
-        for e in entries.flatten() {
-            let path = e.path();
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let lower = name.to_lowercase();
-            if !(lower.ends_with(".iso") || lower.ends_with(".img")) { continue; }
-            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-            if out.len() < 60 {
-                out.push(serde_json::json!({
-                    "name": name, "path": path.to_string_lossy(), "size": size,
-                }));
-            }
-        }
-    }
-    out.sort_by_key(|v| v["name"].as_str().unwrap_or("").to_lowercase());
-    out.dedup_by_key(|v| v["path"].as_str().unwrap_or("").to_string());
-    out
+fn local_images() -> Result<serde_json::Value, String> {
+    let v = one_shot(&["local"])?;
+    Ok(v.get("images").cloned().unwrap_or_else(|| serde_json::json!([])))
+}
+
+/// The person's home and download folders, for "~/" in a typed path and as the place a catalog
+/// download goes. Downloads falls back to home when it does not exist, because the CLI refuses a
+/// missing output directory and a download that dies on that is a confusing first experience.
+#[tauri::command]
+fn places() -> serde_json::Value {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let dl = format!("{home}/Downloads");
+    let downloads = if std::path::Path::new(&dl).is_dir() { dl } else { home.clone() };
+    serde_json::json!({ "home": home, "downloads": downloads })
+}
+
+/// The desktop's own file picker. It runs on the Rust side, so the window is never granted the
+/// dialog permission itself: it can ask for a path through this one command and nothing else.
+#[tauri::command]
+async fn browse(app: AppHandle, purpose: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let start = places()["downloads"].as_str().unwrap_or("/").to_string();
+    let title = if purpose == "verify" { "Pick a file to check" } else { "Pick an image to write" };
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        // GTK file filters match case-sensitively, so the common upper-case spellings are listed
+        let mut d = app.dialog().file().set_title(title).set_directory(start)
+            .add_filter("Disk images", &["iso", "ISO", "img", "IMG", "raw", "dd", "wic",
+                                          "xz", "zst", "zstd", "gz", "bz2"])
+            .add_filter("All files", &["*"]);
+        if let Some(w) = app.get_webview_window("main") { d = d.set_parent(&w); }
+        d.blocking_pick_file()
+    }).await.ok().flatten()?;
+    picked.into_path().ok().map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Start a long job (download or burn) and stream its JSON lines to the window as they arrive.
@@ -176,6 +206,7 @@ fn stream(app: AppHandle, state: State<'_, Running>, mut args: Vec<String>, priv
 #[tauri::command]
 fn start_burn(app: AppHandle, state: State<'_, Running>, image: String, device: String,
               allow_internal: bool, verify: bool, scheme: String) -> Result<(), String> {
+    absolute(&image, "image")?;
     let mut args = vec!["write".to_string(), image, "--to".into(), device, "--yes".into()];
     if allow_internal { args.push("--allow-internal".into()); }
     if !verify { args.push("--no-verify".into()); }
@@ -202,6 +233,7 @@ fn start_download(app: AppHandle, state: State<'_, Running>, id: String, out: St
 fn start_hash(app: AppHandle, state: State<'_, Running>, path: String, expect: String)
     -> Result<(), String>
 {
+    absolute(&path, "file")?;
     let mut args = vec!["hash".into(), path];
     let e = expect.trim().to_string();
     if !e.is_empty() { args.push("--expect".into()); args.push(e); }
@@ -241,9 +273,28 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Running::default())
+        // A file dropped on the window. The native drop is used, not the page's HTML drag events:
+        // those carry a File object with no path, and a path is the one thing the CLI needs.
+        // Forwarded on the same channel as everything else, so the page has one listener.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(dd) = event {
+                let v = match dd {
+                    tauri::DragDropEvent::Enter { paths, .. } =>
+                        serde_json::json!({ "event": "drag", "over": true, "count": paths.len() }),
+                    tauri::DragDropEvent::Drop { paths, .. } => serde_json::json!({
+                        "event": "drop",
+                        "paths": paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                    }),
+                    tauri::DragDropEvent::Leave => serde_json::json!({ "event": "drag", "over": false }),
+                    _ => return,
+                };
+                let _ = window.emit("arxburn", v);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            devices, images, resolve, networks, local_images, inspect, update_check,
+            devices, images, resolve, networks, local_images, places, browse, inspect, update_check,
             start_burn, start_download, start_update, start_hash, cancel, version
         ])
         .run(tauri::generate_context!())

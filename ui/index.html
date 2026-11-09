@@ -44,14 +44,18 @@
     <section id="burn" class="panel active">
       <div class="phead">
         <h1 class="pf">Write an image</h1>
-        <p>Pick a file and a disk. It is written, read back, and checked byte for byte.</p>
+        <p>Pick a file and a disk, or drop an image on this window. It is written, read back, and
+           checked byte for byte. Compressed images are unpacked while they are written.</p>
       </div>
 
       <div class="grid">
         <div class="card">
-          <div class="card-head"><span class="k">1. The image</span></div>
+          <div class="card-head">
+            <span class="k">1. The image</span>
+            <button id="browse" class="glass small">Browse</button>
+          </div>
           <input id="image-path" type="text" class="mono" spellcheck="false"
-                 placeholder="/home/you/Downloads/arxos-0.0.1.iso" />
+                 placeholder="/home/you/Downloads/arxos-0.0.2-x86_64.iso" />
           <div id="image-scheme" class="scheme-line"></div>
           <ul id="local-list" class="rows"></ul>
         </div>
@@ -113,9 +117,12 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><span class="k">The file</span></div>
+        <div class="card-head">
+          <span class="k">The file</span>
+          <button id="verify-browse" class="glass small">Browse</button>
+        </div>
         <input id="verify-path" type="text" class="mono" spellcheck="false"
-               placeholder="/home/you/Downloads/arxos-0.0.1.iso" />
+               placeholder="/home/you/Downloads/arxos-0.0.2-x86_64.iso" />
         <ul id="verify-list" class="rows"></ul>
       </div>
 
@@ -161,6 +168,15 @@
     <p id="dialog-body"></p>
     <div id="dialog-hash" class="mono"></div>
     <button id="dialog-close" class="primary">Close</button>
+  </div>
+</div>
+<!-- Shown while a file is held over the window. Still, like the rest: it appears and says what a
+     drop will do on the panel that is open, then goes. -->
+<div id="drop" class="drop hidden">
+  <div class="drop-card">
+    <div id="drop-title" class="pf">Drop it to write it</div>
+    <p>ISO images, raw disk images (.img), and images compressed with xz, zstd, gzip or bzip2.
+       The file is read to see what it is; the name is not trusted.</p>
   </div>
 </div>
 <script src="app.js"></script>

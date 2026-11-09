@@ -70,7 +70,7 @@ fn critical_sources(mountinfo: &str) -> (Vec<(u32, u32)>, Vec<String>) {
 
 /// Walk a mount source back to the whole disks it lives on: a partition to its disk, and a
 /// device-mapper node (LUKS, LVM) through its slaves, which is how an encrypted root resolves.
-fn disks_behind(source: &str) -> Vec<String> {
+pub(crate) fn disks_behind(source: &str) -> Vec<String> {
     let real = fs::canonicalize(source).unwrap_or_else(|_| PathBuf::from(source));
     let name = match real.file_name() { Some(n) => n.to_string_lossy().to_string(), None => return vec![] };
     let mut out = Vec::new();
@@ -117,8 +117,11 @@ pub fn list(include_loop: bool) -> Vec<Device> {
     let entries = match fs::read_dir("/sys/block") { Ok(e) => e, Err(_) => return devices };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        // ram/zram/dm/sr are not burn targets; loop only when asked (it is how you test an image)
-        if name.starts_with("ram") || name.starts_with("zram") || name.starts_with("dm-") || name.starts_with("sr") {
+        // ram/zram/dm/sr are not burn targets, and neither is a floppy drive (fd: 1.44 MB at most,
+        // and a QEMU "pc" machine always has an empty one, which showed up as a removable target);
+        // loop only when asked (it is how you test an image)
+        if name.starts_with("ram") || name.starts_with("zram") || name.starts_with("dm-") || name.starts_with("sr")
+            || name.starts_with("fd") {
             continue;
         }
         if name.starts_with("loop") && !include_loop {

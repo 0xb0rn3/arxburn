@@ -1,6 +1,6 @@
 [package]
 name = "arxburn-gui"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "arxburn GUI: write an image to a USB stick, and watch every byte land"
 authors = ["0xb0rn3"]
@@ -18,5 +18,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# the desktop's own file picker, called from Rust only (the window gets no dialog permission)
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

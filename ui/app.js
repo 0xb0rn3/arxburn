@@ -4,9 +4,19 @@ const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
 
 const $ = (id) => document.getElementById(id);
-let picked = { image: null, device: null, allowInternal: false };
+let picked = { image: null, device: null, allowInternal: false, refused: "" };
 let sawProgress = false;
 let images = [];
+let place = { home: "", downloads: "" };
+
+// Anything that came from outside this program is text, never markup: a file name in Downloads,
+// a USB stick's model string (a stick names itself), a file name scraped from a mirror's listing.
+// Put into innerHTML raw, any of them could run script in a window that can start a burn.
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// "~/" in a typed path means the home folder, as it does in a terminal
+const expand = (p) => (p.startsWith("~/") && place.home ? place.home + p.slice(1) : p);
 
 function human(n) {
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -40,13 +50,13 @@ async function loadDevices() {
     const side = d.holds_root
       ? `<span class="tag sys">system disk</span><span class="why">this is what you are running; it can never be a target</span>`
       : refused
-        ? `<span class="tag no">not offered</span><span class="why">${refused}</span>`
+        ? `<span class="tag no">not offered</span><span class="why">${esc(refused)}</span>`
         : (d.mounts && d.mounts.length)
-          ? `<span class="tag warn">mounted</span><span class="why">${d.mounts.join(", ")}, it will be unmounted first</span>`
+          ? `<span class="tag warn">mounted</span><span class="why">${esc(d.mounts.join(", "))}, it will be unmounted first</span>`
           : `<span class="tag ok">ready</span>`;
     li.innerHTML = `<div>
-        <div class="name">${d.name}<span class="model">${d.model || ""}</span></div>
-        <div class="meta">${d.size_human} &middot; ${d.removable ? "removable" : "internal"}</div>
+        <div class="name">${esc(d.name)}<span class="model">${esc(d.model)}</span></div>
+        <div class="meta">${esc(d.size_human)} &middot; ${d.removable ? "removable" : "internal"}</div>
       </div><div class="side">${side}</div>`;
 
     const canPick = !d.holds_root && (!refused || d.refusal_internal_allowed === null);
@@ -65,49 +75,105 @@ async function loadDevices() {
   if (!(answer.devices || []).length) log("no block devices found", "err");
 }
 
-async function loadLocal() {
-  const list = $("local-list");
-  list.innerHTML = "";
-  const files = await invoke("local_images");
-  for (const f of files) {
-    const li = document.createElement("li");
-    li.innerHTML = `<div><div class="name">${f.name}</div>
-      <div class="meta">${f.path}</div></div><span class="side meta">${human(f.size)}</span>`;
-    li.onclick = () => {
-      $("image-path").value = f.path;
-      picked.image = f.path;
-      [...list.children].forEach((x) => x.classList.remove("picked"));
-      li.classList.add("picked");
-      showScheme(f.path);
-      ready();
-    };
-    list.appendChild(li);
-  }
-  if (!files.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = "No .iso or .img found in Downloads or your home. Type a path above, or fetch one from Images.";
-    list.appendChild(li);
-  }
+// A compressed image is also described by what lands on the stick, because that is what has to fit.
+function sizeCell(f) {
+  const unpacked = f.write_size ? `${human(f.write_size)} unpacked` : "unpacked size not recorded";
+  return esc(human(f.size)) + (f.compression ? `<span class="sub">${esc(f.compression)}, ${esc(unpacked)}</span>` : "");
 }
 
-// What will actually boot from this image. Asked of the CLI, which reads the sectors.
-async function showScheme(path) {
+// shown with ~ for the home folder, as a terminal would; the full path stays in the tooltip
+const tilde = (p) => (place.home && p.startsWith(place.home + "/") ? "~" + p.slice(place.home.length) : p);
+
+// The images the CLI found on this machine, read by content. One list feeds both panels.
+async function localImages() {
+  try { return await invoke("local_images"); }
+  catch (e) { log(String(e), "err"); return []; }
+}
+
+// One row of a found image: name, what it is, where it is, how big.
+function imageRow(f, onPick) {
+  const li = document.createElement("li");
+  li.dataset.path = f.path;
+  li.innerHTML = `<div><div class="name">${esc(f.name)}<span class="model">${esc(f.kind)}</span>` +
+    (f.external ? `<span class="tag ext">USB drive</span>` : "") + `</div>
+    <div class="meta">${esc(tilde(f.path))}</div></div><span class="side meta size">${sizeCell(f)}</span>`;
+  li.title = `${f.path}\n${f.label || ""}`;
+  li.onclick = () => onPick(f.path);
+  return li;
+}
+
+function emptyRow(list, text) {
+  const li = document.createElement("li");
+  li.className = "empty";
+  li.textContent = text;
+  list.appendChild(li);
+}
+
+const NONE_FOUND = "No disk images found in Desktop, Downloads, ~/iso, your home folder or a mounted " +
+  "USB drive. Browse for one, drop it on this window, or fetch one from Images.";
+
+async function loadLocal() {
+  const list = $("local-list");
+  const files = await localImages();
+  list.innerHTML = "";
+  for (const f of files) list.appendChild(imageRow(f, pickImage));
+  if (!files.length) emptyRow(list, NONE_FOUND);
+  mark(list, picked.image);
+}
+
+// highlight the row for this path, if the list has one
+function mark(list, path) {
+  [...list.children].forEach((x) => x.classList.toggle("picked", !!path && x.dataset.path === path));
+}
+
+// Every way of choosing an image (the list, Browse, a dropped file, typing) ends here, so they
+// cannot behave differently.
+function pickImage(path) {
+  $("image-path").value = path;
+  mark($("local-list"), path);
+  showScheme(path);
+}
+
+// What this file is and what will boot from it. Asked of the CLI, which reads the content: the
+// format, the compression and the size once unpacked, or why it cannot be written at all.
+async function showScheme(raw) {
   const el = $("image-scheme");
+  const path = expand(raw.trim());
+  picked.refused = "";
+  ready();
   if (!path) { el.textContent = ""; return; }
+  if (!path.startsWith("/")) {
+    el.innerHTML = `<span class="caution">Give the full path, starting with / (or ~/ for your home folder).</span>`;
+    return;
+  }
   el.textContent = "reading the first sectors…";
+  const stale = () => expand($("image-path").value.trim()) !== path; // a newer pick replaced it
   try {
     const r = await invoke("inspect", { path });
-    const cls = r.boots && r.boots.startsWith("hybrid") ? "yes" : "warn";
-    el.innerHTML = `${r.summary} &middot; <span class="${cls}">${r.boots}</span>`;
+    if (stale()) return;
+    if (r.refused) {
+      // said in full, and Write stays off: the CLI would refuse it anyway, after a password
+      picked.refused = r.refused;
+      el.innerHTML = `<span class="bad">This cannot be written to a disk: ${esc(r.refused)}</span>`;
+    } else {
+      const unpacked = r.write_size ? `${human(r.write_size)} once unpacked` : "unpacked size not recorded in the file";
+      const what = r.compression
+        ? `${esc(r.format_label)} &middot; ${esc(r.compression)}, ${unpacked}`
+        : `${esc(r.format_label)} &middot; ${human(r.write_size || r.file_size)}`;
+      const cls = r.boots && r.boots.startsWith("hybrid") ? "yes" : "caution";
+      el.innerHTML = `<span class="what">${what}</span><br>${esc(r.summary)} &middot; <span class="${cls}">${esc(r.boots)}</span>`;
+    }
   } catch (e) {
-    el.innerHTML = `<span class="warn">${String(e)}</span>`;
+    if (stale()) return;
+    el.innerHTML = `<span class="caution">${esc(e)}</span>`;
   }
+  ready();
 }
 
 function ready() {
-  picked.image = $("image-path").value.trim() || picked.image;
-  $("burn-btn").disabled = !(picked.image && picked.device);
+  const p = expand($("image-path").value.trim());
+  picked.image = p.startsWith("/") ? p : null;
+  $("burn-btn").disabled = !(picked.image && picked.device && !picked.refused);
 }
 
 // ---- the catalog -----------------------------------------------------------------------
@@ -127,8 +193,8 @@ function renderImages() {
     if (family && i.family !== family) continue;
     if (term && !(`${i.id} ${i.name} ${i.note}`.toLowerCase().includes(term))) continue;
     const li = document.createElement("li");
-    li.innerHTML = `<div><div class="name">${i.name}<span class="model">${i.id}</span></div>
-        <div class="meta">${i.note}</div></div>
+    li.innerHTML = `<div><div class="name">${esc(i.name)}<span class="model">${esc(i.id)}</span></div>
+        <div class="meta">${esc(i.note)}</div></div>
       <div class="acts"><button class="glass small" data-act="resolve">Latest</button>
            <button class="glass small" data-act="get">Download</button></div>`;
     li.querySelector('[data-act="resolve"]').onclick = async (e) => {
@@ -141,9 +207,10 @@ function renderImages() {
       log(`asking ${i.id} what the newest build is…`, "step");
       try {
         const r = await invoke("resolve", { id: i.id });
-        meta.innerHTML = `<span style="color:var(--ok)">${r.filename}</span>` +
+        // the file name comes from the mirror's own listing: text, never markup
+        meta.innerHTML = `<span style="color:var(--ok)">${esc(r.filename)}</span>` +
           (r.size ? ` &middot; ${human(r.size)}` : "") +
-          (r.sha256 ? `<br><span style="font-size:.66rem">sha256 ${r.sha256}</span>` : "");
+          (r.sha256 ? `<br><span style="font-size:.66rem">sha256 ${esc(r.sha256)}</span>` : "");
         log(`${i.id}: ${r.filename}${r.size ? " (" + human(r.size) + ")" : ""}`, "ok");
       } catch (err) {
         meta.textContent = was;
@@ -152,21 +219,16 @@ function renderImages() {
     };
     li.querySelector('[data-act="get"]').onclick = async (e) => {
       e.stopPropagation();
-      const out = (await homeDir()) + "/Downloads";
+      const out = place.downloads || ".";
       const meta = li.querySelector(".meta");
       meta.textContent = `downloading into ${out}…`;
       log(`downloading ${i.id} into ${out}`, "step");
       showProgress("download");
       try { await invoke("start_download", { id: i.id, out }); }
-      catch (err) { meta.innerHTML = `<span class="warn">${String(err)}</span>`; log(String(err), "err"); hideProgress(); }
+      catch (err) { meta.innerHTML = `<span class="caution">${esc(err)}</span>`; log(String(err), "err"); hideProgress(); }
     };
     list.appendChild(li);
   }
-}
-
-async function homeDir() {
-  try { const d = await invoke("local_images"); return (d[0]?.path || "").split("/").slice(0, 3).join("/") || "."; }
-  catch { return "."; }
 }
 
 // ---- running a job ---------------------------------------------------------------------
@@ -264,7 +326,29 @@ listen("arxburn", (e) => {
     case "step": log(m.message, "step"); break;
     case "ok": log(m.message, "ok"); break;
     case "error": log(m.message, "err"); break;
+    case "warning": log(m.message, "warn"); break;
     case "target": log(`target ${m.device}, ${human(m.size)}`); break;
+    case "format":
+      log(m.compression
+        ? `${m.label}, ${m.compression}: unpacked while it is written` +
+          (m.write_size ? ` (${human(m.write_size)})` : "")
+        : m.label);
+      break;
+
+    // a file held over the window, then let go
+    case "drag":
+      $("drop-title").textContent = activePanel() === "verify" ? "Drop it to check it" : "Drop it to write it";
+      $("drop").classList.toggle("hidden", !m.over);
+      break;
+    case "drop": {
+      $("drop").classList.add("hidden");
+      const paths = m.paths || [];
+      if (!paths.length) break;
+      if (paths.length > 1) log(`${paths.length} files dropped; using the first, ${paths[0]}`, "warn");
+      if (activePanel() === "verify") pickVerify(paths[0]);
+      else { showPanel("burn"); pickImage(paths[0]); }
+      break;
+    }
     case "done":
       hideProgress();
       log(m.verified ? `verified: the disk carries the image, byte for byte (${m.sha256})`
@@ -292,7 +376,7 @@ listen("arxburn", (e) => {
       } else if (m.matches === false) {
         out.className = "verify-out bad";
         out.innerHTML = `This is NOT the file that hash describes.
-          <span class="sha">computed ${short}</span><span class="sha">you gave ${m.expected}</span>`;
+          <span class="sha">computed ${short}</span><span class="sha">you gave ${esc(m.expected)}</span>`;
         dialog(false, "It does not match",
           "The file on disk hashes to something else. Either the download was corrupted or truncated, or it is not the file that hash belongs to. Download it again before writing it to anything.",
           `computed ${short}`);
@@ -375,31 +459,26 @@ $("refresh").onclick = () => { loadDevices(); loadLocal(); };
 // ---- verify ---------------------------------------------------------------------------------
 async function loadVerifyList() {
   const list = $("verify-list");
+  const files = await localImages();
   list.innerHTML = "";
-  const files = await invoke("local_images");
-  for (const f of files) {
-    const li = document.createElement("li");
-    li.innerHTML = `<div><div class="name">${f.name}</div><div class="meta">${f.path}</div></div>
-      <span class="side meta">${human(f.size)}</span>`;
-    li.onclick = () => {
-      $("verify-path").value = f.path;
-      [...list.children].forEach((x) => x.classList.remove("picked"));
-      li.classList.add("picked");
-    };
-    list.appendChild(li);
-  }
-  if (!files.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = "No .iso or .img found. Type a path above.";
-    list.appendChild(li);
-  }
+  for (const f of files) list.appendChild(imageRow(f, pickVerify));
+  if (!files.length) emptyRow(list, NONE_FOUND);
+  mark(list, expand($("verify-path").value.trim()));
+}
+
+function pickVerify(path) {
+  $("verify-path").value = path;
+  mark($("verify-list"), path);
+  $("verify-out").className = "verify-out";
+  $("verify-out").textContent = "";
 }
 
 $("verify-btn").onclick = async () => {
-  const path = $("verify-path").value.trim();
+  const path = expand($("verify-path").value.trim());
   if (!path) { $("verify-out").className = "verify-out bad";
                $("verify-out").textContent = "Pick a file first."; return; }
+  if (!path.startsWith("/")) { $("verify-out").className = "verify-out bad";
+               $("verify-out").textContent = "Give the full path, starting with / (or ~/ for your home folder)."; return; }
   const expect = $("verify-expect").value.trim();
   $("verify-out").className = "verify-out";
   $("verify-out").textContent = "reading the whole file…";
@@ -415,23 +494,36 @@ $("verify-btn").onclick = async () => {
 };
 let schemeTimer = null;
 $("image-path").oninput = () => {
+  // what was refused was the previous path, not this one
+  picked.refused = "";
   ready();
+  mark($("local-list"), expand($("image-path").value.trim()));
   clearTimeout(schemeTimer);
-  schemeTimer = setTimeout(() => showScheme($("image-path").value.trim()), 500);
+  schemeTimer = setTimeout(() => showScheme($("image-path").value), 500);
 };
+$("verify-path").oninput = () => mark($("verify-list"), expand($("verify-path").value.trim()));
 $("search").oninput = renderImages;
 $("family").onchange = renderImages;
 
-document.querySelectorAll(".nav-item").forEach((tab) => {
-  tab.onclick = () => {
-    document.querySelectorAll(".nav-item").forEach((t) => t.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
-    tab.classList.add("active");
-    $(tab.dataset.tab).classList.add("active");
-    if (tab.dataset.tab === "images" && !images.length) loadImages();
-    if (tab.dataset.tab === "verify") loadVerifyList();
-  };
-});
+// The desktop's own file picker. Closing it without choosing changes nothing.
+async function browse(purpose) {
+  let path = null;
+  try { path = await invoke("browse", { purpose }); }
+  catch (e) { log(String(e), "err"); return; }
+  if (!path) return;
+  if (purpose === "verify") pickVerify(path); else pickImage(path);
+}
+$("browse").onclick = () => browse("burn");
+$("verify-browse").onclick = () => browse("verify");
+
+const activePanel = () => document.querySelector(".panel.active")?.id || "burn";
+function showPanel(id) {
+  document.querySelectorAll(".nav-item").forEach((t) => t.classList.toggle("active", t.dataset.tab === id));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === id));
+  if (id === "images" && !images.length) loadImages();
+  if (id === "verify") loadVerifyList();
+}
+document.querySelectorAll(".nav-item").forEach((tab) => { tab.onclick = () => showPanel(tab.dataset.tab); });
 
 // Updates: the CLI owns the version comparison and the hash check, this only asks and reports.
 let updateReady = false;
@@ -473,6 +565,7 @@ $("update-btn").onclick = async () => {
   const m = v.match(/^(\S+\s+\S+)\s*\((.*)\)$/);
   $("version").textContent = m ? m[1] : v;
   $("engine").textContent = m ? m[2] : "";
+  try { place = await invoke("places"); } catch (_) { /* typed ~/ paths just stay unexpanded */ }
   await loadDevices();
   await loadLocal();
 })();

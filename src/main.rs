@@ -21,7 +21,9 @@
 
 mod catalog;
 mod fetch;
+mod format;
 mod json;
+mod local;
 mod dev;
 mod net;
 mod parts;
@@ -56,6 +58,9 @@ const RST: &str = "\x1b[0m";
 
 fn ok(msg: &str) { if json_mode() { json::line(&[("event", json::s("ok")), ("message", json::s(msg))]); } else { println!("  {GRN}ok{RST} {msg}"); } }
 fn no(msg: &str) { if json_mode() { json::line(&[("event", json::s("error")), ("message", json::s(msg))]); } else { eprintln!("  {RED}!!{RST} {msg}"); } }
+/// Worth knowing but not a failure: --json emits "warning", never "error", so the GUI does not
+/// read a caution as a failed burn.
+fn warn(msg: &str) { if json_mode() { json::line(&[("event", json::s("warning")), ("message", json::s(msg))]); } else { eprintln!("  {YEL}!!{RST} {msg}"); } }
 fn step(msg: &str) { if json_mode() { json::line(&[("event", json::s("step")), ("message", json::s(msg))]); } else { println!("{BOLD}>>{RST} {msg}"); } }
 
 fn die(msg: &str) -> ! { no(msg); exit(1) }
@@ -79,6 +84,7 @@ fn main() {
         }
         "list" | "ls" | "devices" => cmd_list(&args[2..]),
         "iso" | "images" | "catalog" => cmd_iso(&args[2..]),
+        "local" | "here" => cmd_local(&args[2..]),
         "get" | "fetch" | "download" => cmd_get(&args[2..]),
         "write" | "burn" | "w" => cmd_write(&args[2..]),
         "verify" | "check" => cmd_verify(&args[2..]),
@@ -93,10 +99,12 @@ fn usage() {
     println!();
     println!("  arxburn list [--loop]                     block devices, and which are refused");
     println!("  arxburn iso [term] [--windows|--linux]    images it can fetch");
+    println!("  arxburn local [--no-drives]               images already here: Desktop, Downloads, ~/iso,");
+    println!("                                            home, this folder, and mounted USB/external drives");
     println!("  arxburn get <id> [--to <device>]          download the newest, check it, burn it");
     println!("  arxburn write <image> --to <device|UUID>  burn a file you already have");
     println!("  arxburn verify <image> --to <device|UUID> re-check a stick burned earlier");
-    println!("  arxburn inspect <image|device>            MBR, GPT, and what will boot it");
+    println!("  arxburn inspect <image|device>            what the image is, MBR, GPT, what will boot it");
     println!("  arxburn update [--check]                  fetch the newest release and replace this");
     println!();
     println!("{BOLD}options{RST}");
@@ -108,6 +116,13 @@ fn usage() {
     println!("  --allow-internal    permit a non-removable disk. The running system stays refused.");
     println!("  --scheme gpt|mbr    after verifying, leave the stick looking like one scheme");
     println!("  --loop              allow /dev/loopN targets, for testing against an image file");
+    println!();
+    println!("{BOLD}images{RST}");
+    println!("  An image is recognised by its bytes, not its name: ISO 9660 / UDF and raw disk images are");
+    println!("  written as they are; .xz .zst .gz .bz2 images are decompressed while they are written, by");
+    println!("  the system's own xz/zstd/gzip/bzip2, and the stick is verified against the decompressed");
+    println!("  bytes. Archives (.zip .7z .rar .tar) and VM disks (qcow2, VHD/VHDX, VMDK, VDI, DMG) are");
+    println!("  refused before anything is erased, with what to do instead.");
     println!();
     println!("{DIM}  The disk carrying / is never a target. Mounted partitions are unmounted first,");
     println!("  and you are told which. Without --yes you confirm by typing the device name.{RST}");
@@ -232,6 +247,44 @@ fn cmd_iso(args: &[String]) {
     println!();
     println!("{DIM}  arxburn iso <id>        resolve the newest build and show its link and hash");
     println!("  arxburn get <id> --to sdc   download it, check it, and burn it{RST}");
+}
+
+/// Images already on this machine or a mounted drive, by content, newest first. One JSON line
+/// in --json mode (the GUI's one-shot reader takes the last line).
+fn cmd_local(args: &[String]) {
+    let home = local::user_home();
+    let cwd = std::env::current_dir().ok();
+    let mounts = if flag(args, "--no-drives") { Vec::new() } else { local::external_mounts() };
+    let found = local::scan(&local::roots(&home, cwd.as_deref(), &mounts));
+    if json_mode() {
+        let rows: Vec<Vec<(&'static str, json::V)>> = found.iter().map(|f| vec![
+            ("path", json::s(f.path.to_string_lossy())),
+            ("name", json::s(f.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())),
+            ("size", json::V::N(f.size)),
+            ("write_size", json::V::N(f.write_size.unwrap_or(0))),
+            ("kind", json::s(f.kind.code())),
+            ("label", json::s(f.kind.label())),
+            ("compression", json::s(f.compression.map(|c| c.name()).unwrap_or(""))),
+            ("mtime", json::V::N(f.mtime.max(0) as u64)),
+            ("external", json::V::B(f.external)),
+        ]).collect();
+        json::line(&[("event", json::s("local")), ("images", json::V::Arr(rows))]);
+        return;
+    }
+    if found.is_empty() {
+        ok("no images in Desktop, Downloads, ~/iso, your home folder, this folder or a mounted drive");
+        return;
+    }
+    step(&format!("{} image{} found, newest first", found.len(), if found.len() == 1 { "" } else { "s" }));
+    for f in &found {
+        let size = match (f.compression, f.write_size) {
+            (Some(c), Some(n)) => format!("{} ({}, {} written)", dev::human(f.size), c.name(), dev::human(n)),
+            (Some(c), None) => format!("{} ({})", dev::human(f.size), c.name()),
+            _ => dev::human(f.size),
+        };
+        println!("  {:<5} {:<34} {}{}", f.kind.code(), size, f.path.display(),
+            if f.external { format!("  {DIM}(external drive){RST}") } else { String::new() });
+    }
 }
 
 fn cmd_get(args: &[String]) {
@@ -472,9 +525,14 @@ fn with_commas(n: u64) -> String {
 
 /// Hash a file, streaming, with a live counter when a phase is named.
 fn hash_file(p: &Path, phase: Option<&'static str>) -> std::io::Result<(String, u64)> {
-    let mut f = File::open(p)?;
+    let f = File::open(p)?;
     sequential(&f);
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    hash_reader(f, phase, len)
+}
+
+/// Hash everything a reader yields: a file, or a decompressor's output (total 0 = unknown).
+fn hash_reader(mut f: impl Read, phase: Option<&'static str>, len: u64) -> std::io::Result<(String, u64)> {
     let mut meter = phase.map(|ph| Meter::new(ph, len));
     let mut h = sha256::Sha256::new();
     let mut buf = vec![0u8; block_size()];
@@ -538,8 +596,29 @@ fn cmd_inspect(args: &[String]) {
         dev::resolve(&target, flag(args, "--loop")).map(|d| d.path)
             .unwrap_or_else(|_| PathBuf::from(&target))
     };
-    let head = head_of(&path).unwrap_or_else(|e| die(&format!("cannot read {}: {e}", path.display())));
-    let s = parts::read(&head);
+    // a file is classified by its bytes (and looked at through its decompressor if compressed);
+    // a device shows what is on it now
+    let is_file = path.is_file();
+    let (kind, head) = if is_file {
+        format::sniff_file(&path).unwrap_or_else(|e| die(&format!("cannot read {}: {e}", path.display())))
+    } else {
+        let h = head_of(&path).unwrap_or_else(|e| die(&format!("cannot read {}: {e}", path.display())));
+        (format::sniff(&h), h)
+    };
+    let compression = match kind { format::Kind::Compressed(c) => Some(c), _ => None };
+    let file_len = if is_file { path.metadata().map(|m| m.len()).unwrap_or(0) } else { 0 };
+    let (inner, write_len) = match compression {
+        Some(c) if format::tool_present(c) =>
+            (format::decompressed_head(c, &path).unwrap_or_default(), format::uncompressed_size(c, &path)),
+        Some(_) => (Vec::new(), None),
+        None => (head, if is_file { Some(file_len) } else { None }),
+    };
+    let inner_kind = if compression.is_some() { format::sniff(&inner) } else { kind.clone() };
+    let refused = match (&kind, &inner_kind) {
+        (format::Kind::Refuse(w), _) | (_, format::Kind::Refuse(w)) => *w,
+        _ => "",
+    };
+    let s = parts::read(&inner);
     if json_mode() {
         let rows: Vec<Vec<(&'static str, json::V)>> = s.entries.iter().map(|e| vec![
             ("type", json::V::N(e.kind as u64)),
@@ -553,10 +632,21 @@ fn cmd_inspect(args: &[String]) {
                      ("el_torito", json::V::B(s.el_torito)),
                      ("efi_partition", json::V::B(s.efi_partition)),
                      ("summary", json::s(s.summary())), ("boots", json::s(s.boots())),
+                     ("format", json::s(inner_kind.code())), ("format_label", json::s(inner_kind.label())),
+                     ("compression", json::s(compression.map(|c| c.name()).unwrap_or(""))),
+                     ("file_size", json::V::N(file_len)), ("write_size", json::V::N(write_len.unwrap_or(0))),
+                     ("refused", json::s(refused)),
                      ("partitions", json::V::Arr(rows))]);
         return;
     }
     step(&format!("{}", path.display()));
+    match compression {
+        Some(c) if !format::tool_present(c) => warn(&format!("{0}-compressed, and {0} is not installed to look inside it", c.name())),
+        Some(c) => ok(&format!("{}-compressed {}{}", c.name(), inner_kind.label(),
+            write_len.map(|n| format!(", {} once written", dev::human(n))).unwrap_or_default())),
+        None => ok(&inner_kind.label()),
+    }
+    if !refused.is_empty() { no(&format!("cannot be written: {refused}")); }
     ok(&format!("{}", s.summary()));
     println!("     {}", s.boots());
     for (i, e) in s.entries.iter().enumerate() {
@@ -698,29 +788,74 @@ fn cmd_write(args: &[String]) {
 fn burn(image: &Path, target: &str, args: &[String], known: Option<(String, u64)>) {
     let allow_internal = flag(args, "--allow-internal");
     let d = dev::resolve(target, flag(args, "--loop")).unwrap_or_else(|e| die(&e));
+    // An image kept on the very stick it is about to be written to would be destroyed while it is
+    // being read. Before images on mounted drives were listed this was rare; now it is one click.
+    // Resolved through partitions and dm (LUKS, LVM) down to the whole disk.
+    if let Some(node) = local::device_of(image) {
+        if dev::disks_behind(&format!("/dev/{node}")).iter().any(|disk| disk == &d.name) {
+            die(&format!("refusing: {} is stored on {}, the device it would be written to; copy it somewhere else first",
+                image.display(), d.path.display()));
+        }
+    }
     let img_len_meta = image.metadata().map(|m| m.len()).unwrap_or(0);
 
-    step(&format!("image  {} ({})", image.display(), dev::human(img_len_meta)));
+    // What the file IS decides how it is written, never its name. A compressed image is looked at
+    // through its decompressor, so the scheme, the size check and the refusals below are about the
+    // image that will land on the device, not about its wrapping.
+    let (kind, head) = format::sniff_file(image)
+        .unwrap_or_else(|e| die(&format!("cannot read {}: {e}", image.display())));
+    if let format::Kind::Refuse(why) = kind { die(&format!("refusing {}: {why}", image.display())); }
+    let compression = match kind { format::Kind::Compressed(c) => Some(c), _ => None };
+    let (inner, write_len) = match compression {
+        None => (head, Some(img_len_meta)),
+        Some(c) => {
+            if !format::tool_present(c) {
+                die(&format!("this image is {0}-compressed and {0} is not installed: install the {0} package and retry", c.name()));
+            }
+            let inner = format::decompressed_head(c, image)
+                .unwrap_or_else(|e| die(&format!("cannot decompress {}: {e}", image.display())));
+            (inner, format::uncompressed_size(c, image))
+        }
+    };
+    let inner_kind = format::sniff(&inner);
+    match (&inner_kind, compression) {
+        (format::Kind::Refuse(why), Some(c)) => die(&format!("refusing {}: inside the {} compression, {why}", image.display(), c.name())),
+        (format::Kind::Compressed(_), Some(_)) => die(&format!("refusing {}: it is compressed twice; decompress it once and write the result", image.display())),
+        _ => {}
+    }
+
+    step(&format!("image  {} ({}{})", image.display(), dev::human(img_len_meta), match (compression, write_len) {
+        (Some(c), Some(n)) => format!(", {}-compressed, {} once written", c.name(), dev::human(n)),
+        (Some(c), None) => format!(", {}-compressed, written size known once decompressed", c.name()),
+        _ => String::new(),
+    }));
     step(&format!("target {}, {} {}, model {}", d.path.display(), dev::human(d.size),
         if d.removable { "removable" } else { "internal" }, d.model));
     if json_mode() {
         json::line(&[("event", json::s("target")), ("device", json::s(d.path.to_string_lossy())),
-                     ("size", json::V::N(d.size)), ("image_size", json::V::N(img_len_meta))]);
+                     ("size", json::V::N(d.size)), ("image_size", json::V::N(write_len.unwrap_or(0)))]);
+        json::line(&[("event", json::s("format")), ("kind", json::s(inner_kind.code())),
+                     ("label", json::s(inner_kind.label())),
+                     ("compression", json::s(compression.map(|c| c.name()).unwrap_or(""))),
+                     ("file_size", json::V::N(img_len_meta)), ("write_size", json::V::N(write_len.unwrap_or(0)))]);
     }
 
-    if let Ok(head) = head_of(image) {
-        let sc = parts::read(&head);
-        step(&format!("image is {}: {}", sc.summary(), sc.boots()));
-        if json_mode() {
-            json::line(&[("event", json::s("image_scheme")), ("summary", json::s(sc.summary())),
-                         ("boots", json::s(sc.boots())), ("mbr", json::V::B(sc.mbr)),
-                         ("gpt", json::V::B(sc.gpt))]);
-        }
+    let sc = parts::read(&inner);
+    step(&format!("image is {}: {}", sc.summary(), sc.boots()));
+    if json_mode() {
+        json::line(&[("event", json::s("image_scheme")), ("summary", json::s(sc.summary())),
+                     ("boots", json::s(sc.boots())), ("mbr", json::V::B(sc.mbr)),
+                     ("gpt", json::V::B(sc.gpt))]);
+    }
+    if inner_kind == format::Kind::Unknown {
+        warn("no ISO 9660, UDF or partition table found in it: it is written as it is, but it may not boot");
     }
 
     if let Some(reason) = d.refusal(allow_internal) { die(&format!("refusing {}: {reason}", d.path.display())); }
-    if img_len_meta > d.size {
-        die(&format!("image is {} but the device holds {}", dev::human(img_len_meta), dev::human(d.size)));
+    match write_len {
+        Some(n) if n > d.size => die(&format!("image is {} but the device holds {}", dev::human(n), dev::human(d.size))),
+        None => warn("its decompressed size is not recorded in the file: if it is larger than the device, the write stops partway and the device is left incomplete"),
+        _ => {}
     }
 
     // Hashing the image up front costs a whole extra pass over it. It buys one thing: catching a
@@ -768,13 +903,78 @@ fn burn(image: &Path, target: &str, args: &[String], known: Option<(String, u64)
         }
     }
 
-    step(&format!("writing {} to {}", dev::human(img_len_meta), d.path.display()));
-    let (img_hash, written, elapsed) = write_pipelined(image, &d.path, img_len_meta);
-    if let Some((k, _)) = &pre_hash {
-        if k != &img_hash {
-            die("the image changed while it was being written; nothing about this stick can be trusted");
+    step(&format!("writing {} to {}", write_len.map(dev::human).unwrap_or_else(|| "the decompressed image".into()), d.path.display()));
+    let (img_hash, written, elapsed) = match compression {
+        None => {
+            let f = File::open(image).unwrap_or_else(|e| die(&format!("open image: {e}")));
+            sequential(&f);
+            let r = write_pipelined(f, &d.path, img_len_meta).unwrap_or_else(|e| die(&e));
+            if let Some((k, _)) = &pre_hash {
+                if k != &r.0 { die("the image changed while it was being written; nothing about this stick can be trusted"); }
+            }
+            r
         }
-    }
+        Some(c) => {
+            let mut child = format::decompress_stdin(c).unwrap_or_else(|e| die(&format!("cannot start {}: {e}", c.name())));
+            let out = child.stdout.take().unwrap_or_else(|| die("the decompressor gave no output"));
+            // We read and hash the compressed file ourselves and feed it in, so the hash checked
+            // before anything was erased can be compared with what was actually decompressed.
+            let mut sink = child.stdin.take().unwrap_or_else(|| die("cannot feed the decompressor"));
+            let src = image.to_path_buf();
+            let feeder = std::thread::spawn(move || -> std::io::Result<(String, u64)> {
+                let mut f = File::open(&src)?;
+                sequential(&f);
+                let mut h = sha256::Sha256::new();
+                let mut buf = vec![0u8; block_size()];
+                let mut n_total = 0u64;
+                loop {
+                    let n = f.read(&mut buf)?;
+                    if n == 0 { break; }
+                    h.update(&buf[..n]);
+                    n_total += n as u64;
+                    sink.write_all(&buf[..n])?; // a broken pipe here means the decompressor gave up: reported below
+                }
+                drop(sink); // end of input, so the decompressor finishes
+                Ok((sha256::hex(&h.finish()), n_total))
+            });
+            // drained on its own thread so a chatty decompressor can never stall on a full pipe
+            let err = child.stderr.take();
+            let err_text = std::thread::spawn(move || {
+                let mut s = String::new();
+                if let Some(mut e) = err { let _ = e.read_to_string(&mut s); }
+                s
+            });
+            let r = match write_pipelined(out, &d.path, write_len.unwrap_or(0)) {
+                Ok(r) => r,
+                // the device stopped taking data (full, or pulled out): stop the decompressor too,
+                // it has nowhere left to put its output
+                Err(e) => { let _ = child.kill(); let _ = child.wait(); die(&e) }
+            };
+            let fed = feeder.join();
+            let msg = err_text.join().unwrap_or_default();
+            // The decompressor's exit status is its verdict on its own integrity data (CRC, check
+            // sums). It is essential: a truncated or corrupt archive simply ends early, and the read
+            // back alone would pass it, because it compares the device with what was written, and
+            // what was written is exactly that short stream.
+            let st = child.wait().unwrap_or_else(|e| die(&format!("{}: {e}", c.name())));
+            if !st.success() {
+                die(&format!("the compressed image is damaged ({}: {}): the device is NOT a good copy, do not boot it", c.name(), msg.trim()));
+            }
+            match fed {
+                Ok(Ok((compressed_hash, _))) => {
+                    if let Some((k, _)) = &pre_hash {
+                        if k != &compressed_hash { die("the image changed while it was being written; nothing about this stick can be trusted"); }
+                    }
+                }
+                Ok(Err(e)) => die(&format!("read image: {e}")),
+                Err(_) => die("the reading thread stopped unexpectedly; the device is not complete"),
+            }
+            if let Some(n) = write_len {
+                if r.1 != n { die(&format!("{} bytes came out of the decompressor but the image records {}: the device is NOT a good copy", with_commas(r.1), with_commas(n))); }
+            }
+            r
+        }
+    };
     let secs = elapsed.as_secs_f64().max(0.001);
     ok(&format!("wrote {} in {:.1}s ({}/s)", with_commas(written), secs, dev::human((written as f64 / secs) as u64)));
 
@@ -832,14 +1032,17 @@ fn unflushed(meminfo: &str) -> u64 {
         .sum()
 }
 
-fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Duration) {
+/// `src` is the image file, or a decompressor's output for a compressed image; `total` is 0 when
+/// the decompressed size is not known in advance (the meter then shows bytes and rate, no bar).
+///
+/// Returns why it failed instead of exiting, so the caller can stop a decompressor first and the
+/// failure paths can be tested.
+fn write_pipelined(mut src: impl Read, device: &Path, total: u64) -> Result<(String, u64, Duration), String> {
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
 
-    let mut src = File::open(image).unwrap_or_else(|e| die(&format!("open image: {e}")));
-    sequential(&src);
     let mut dst = OpenOptions::new().write(true).open(device)
-        .unwrap_or_else(|e| die(&format!("open {}: {e}", device.display())));
+        .map_err(|e| format!("open {}: {e}", device.display()))?;
 
     let written = Arc::new(AtomicU64::new(0));
     let counter = Arc::clone(&written);
@@ -868,7 +1071,7 @@ fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Dur
             match src.read(&mut buf[filled..]) {
                 Ok(0) => break,
                 Ok(n) => filled += n,
-                Err(e) => die(&format!("read image: {e}")),
+                Err(e) => return Err(format!("read image: {e}")),
             }
         }
         if filled == 0 { break; }
@@ -884,8 +1087,20 @@ fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Dur
     loop {
         let w = written.load(Ordering::Relaxed);
         meter.tick(w);
-        if w >= read_total { break; }
+        // A writer that stopped on an error (the stick was pulled out, the device is full) will
+        // never take what is still queued, so "wait until everything read has been written" never
+        // ends. Every release up to 0.1.7 waited here forever: a burn that hit a write error froze
+        // with its bar stuck instead of saying so. Found by writing an image bigger than its stick.
+        if w >= read_total || writer.is_finished() { break; }
         std::thread::sleep(Duration::from_millis(60));
+    }
+    if written.load(Ordering::Relaxed) < read_total {
+        // stopped early: say why, and do not announce a flush that is not happening
+        return Err(match writer.join() {
+            Ok(Err(e)) => write_error(&e),
+            Ok(Ok(())) => "the device stopped taking data before the image was written; it is NOT a good copy".into(),
+            Err(_) => "the writing thread stopped unexpectedly; the stick is not complete".into(),
+        });
     }
     // Everything the image contains has now been handed to the kernel, so the counter reads 100%.
     // The stick has NOT got it yet: most of it is sitting in the page cache, and sync_all below is
@@ -916,11 +1131,23 @@ fn write_pipelined(image: &Path, device: &Path, total: u64) -> (String, u64, Dur
     let _ = watcher.join();
     match joined {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => die(&format!("write device: {e}")),
-        Err(_) => die("the writing thread stopped unexpectedly; the stick is not complete"),
+        Ok(Err(e)) => return Err(write_error(&e)),
+        Err(_) => return Err("the writing thread stopped unexpectedly; the stick is not complete".into()),
     }
     meter.finish(written.load(Ordering::Relaxed));
-    (sha256::hex(&hasher.finish()), read_total, started.elapsed())
+    Ok((sha256::hex(&hasher.finish()), read_total, started.elapsed()))
+}
+
+/// A device write error, said as what it means for the stick in somebody's hand.
+fn write_error(e: &std::io::Error) -> String {
+    match e.raw_os_error() {
+        // ENOSPC: an image whose unpacked size was not recorded turned out larger than the device
+        Some(28) => "the device is full: the image is larger than it, so the device is NOT a good copy".into(),
+        // EIO, ENXIO, ENODEV: the device went away or is failing
+        Some(5) | Some(6) | Some(19) =>
+            format!("write device: {e}. The stick was removed or is failing; it is NOT a good copy"),
+        _ => format!("write device: {e}"),
+    }
 }
 
 /// Leave the stick looking like one scheme or the other.
@@ -976,7 +1203,24 @@ fn cmd_verify(args: &[String]) {
     };
     let target = opt(args, "--to").unwrap_or_else(|| die("--to <device|UUID> is required"));
     let d = dev::resolve(&target, flag(args, "--loop")).unwrap_or_else(|e| die(&e));
-    let (img_hash, img_len) = hash_file(&image, Some("hash")).unwrap_or_else(|e| die(&format!("cannot read image: {e}")));
+    // a stick written from a compressed image holds the DECOMPRESSED bytes, so that is what it is
+    // compared with; the decompressor's exit status vouches for the archive's own integrity data
+    let (kind, _) = format::sniff_file(&image).unwrap_or_else(|e| die(&format!("cannot read image: {e}")));
+    let (img_hash, img_len) = match kind {
+        format::Kind::Refuse(why) => die(&format!("{}: {why}", image.display())),
+        format::Kind::Compressed(c) => {
+            if !format::tool_present(c) { die(&format!("this image is {0}-compressed and {0} is not installed", c.name())); }
+            let mut child = format::decompress(c, &image).unwrap_or_else(|e| die(&format!("cannot start {}: {e}", c.name())));
+            let out = child.stdout.take().unwrap_or_else(|| die("the decompressor gave no output"));
+            let r = hash_reader(out, Some("hash"), format::uncompressed_size(c, &image).unwrap_or(0))
+                .unwrap_or_else(|e| die(&format!("cannot read the decompressed image: {e}")));
+            if !child.wait().map(|s| s.success()).unwrap_or(false) {
+                die(&format!("the compressed image is damaged ({} could not decompress it)", c.name()));
+            }
+            r
+        }
+        _ => hash_file(&image, Some("hash")).unwrap_or_else(|e| die(&format!("cannot read image: {e}"))),
+    };
     step(&format!("image  sha256 {img_hash} ({})", dev::human(img_len)));
     if img_len > d.size {
         die(&format!("{} holds {} and the image is {}: this stick was never big enough for it",
@@ -999,6 +1243,47 @@ fn drop_caches() {
 
 extern "C" { fn geteuid() -> u32; }
 unsafe fn libc_geteuid() -> u32 { geteuid() }
+
+#[cfg(test)]
+mod write_tests {
+    use super::{block_size, write_pipelined};
+    use std::path::Path;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    // /dev/full fails every write with ENOSPC, which is the image-larger-than-its-device case, and
+    // a pulled stick takes the same path with EIO. Every release up to 0.1.7 waited forever here,
+    // so the test runs the write on its own thread and fails on a deadline instead of hanging too.
+    #[test]
+    fn a_write_error_ends_the_write_with_a_reason_instead_of_hanging() {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            // more blocks than the queue holds, so the writer dies with the queue full
+            let src = std::io::Cursor::new(vec![0u8; 5 * block_size()]);
+            let _ = tx.send(write_pipelined(src, Path::new("/dev/full"), 0));
+        });
+        let r = rx.recv_timeout(Duration::from_secs(30)).expect("write_pipelined hung on a write error");
+        let e = r.expect_err("a device that takes nothing cannot report success");
+        assert!(e.contains("full"), "the reason should say the device is full: {e}");
+    }
+
+    #[test]
+    fn a_good_write_lands_every_byte_and_hashes_what_it_wrote() {
+        let dir = std::env::temp_dir().join(format!("arxburn-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("dev.img");
+        std::fs::File::create(&out).unwrap();
+        let data: Vec<u8> = (0..(block_size() * 2 + 12345)).map(|i| (i * 31 % 251) as u8).collect();
+        let (hash, n, _) = write_pipelined(std::io::Cursor::new(data.clone()), &out, data.len() as u64)
+            .expect("a writable target must succeed");
+        assert_eq!(n, data.len() as u64);
+        assert_eq!(std::fs::read(&out).unwrap(), data, "the target must hold exactly the source");
+        let mut h = crate::sha256::Sha256::new();
+        h.update(&data);
+        assert_eq!(hash, crate::sha256::hex(&h.finish()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
 
 #[cfg(test)]
 mod flush_tests {

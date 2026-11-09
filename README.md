@@ -24,6 +24,7 @@ published `SHA256SUMS` before a single file is installed.
 
 ```sh
 arxburn list                          # what is plugged in, and what it refuses to touch
+arxburn local                         # images already on this machine, found by their content
 arxburn iso                           # images it can fetch, ours and everyone else's
 arxburn get arch --to sdc             # download the newest Arch, check it, burn it, verify it
 arxburn write arxos-0.0.1.iso --to sdc
@@ -52,6 +53,36 @@ and the icon, and nothing else: arxburn writes no configuration and leaves no st
 * **Asks for the device name**, not `y/n`. A yes is too easy to type by reflex.
 * **Reads the bytes back** off the device after writing and hashes them against the image. The page
   cache is dropped first, so the verify reads the stick and not a copy of what was just written.
+* **Reads what a file is, not what it is called.** ISO images and raw disk images are written as
+  they are. Images compressed with xz, zstd, gzip or bzip2 are unpacked while they are written,
+  and the stick is verified against the unpacked image. Anything that would boot nothing is
+  refused before the stick is touched: virtual machine disks (qcow2, VMDK, VHD, VHDX, VDI), a
+  macOS DMG, zip, 7z, rar and tar archives, and an image compressed twice. Each refusal says what
+  the file is and how to convert it.
+* **Will not write a stick onto itself.** An image stored on the device it would be written to is
+  refused, because the write would erase the file while it is still being read.
+* **Stops and says why** when the device fails during a write: it is full, or it was pulled out.
+  Up to 0.1.7 a write error left the tool waiting forever with its progress stuck.
+
+## Images already on this machine
+
+```sh
+arxburn local
+```
+```
+>> 2 images found, newest first
+  iso   3.7 GB                             /home/you/Desktop/arxos-0.0.2-x86_64.iso
+  iso   8.1 GB                             /home/you/Downloads/Parrot-security-7.4_amd64.iso
+```
+
+A compressed image is shown with the size it unpacks to, for example
+`disk  2.0 MB (xz, 3.0 MB written)`.
+
+It looks in Desktop, Downloads, `~/iso`, the home folder, the current folder and any mounted USB
+drive, a few levels deep, and lists only what it would actually write. A VM disk renamed `.img` is
+not listed; a compressed image is listed with the size it will have on the stick. Under sudo it
+searches the home of the user who called sudo, not root's. `--no-drives` leaves the mounted
+drives out.
 
 ## GPT or MBR, and what will actually boot
 
@@ -178,7 +209,13 @@ The window runs the same `arxburn` binary underneath and shows what it prints, s
 the unmounting and the verification are decided in one place. A burn goes through `pkexec`, so no
 password is ever typed into the window.
 
-Three panels: **Burn**, **Images**, and **Verify**. Verify is the sha256 check on its own, for a
+Three panels: **Burn**, **Images**, and **Verify**. Burn lists the images already on the machine
+(the same search as `arxburn local`), and an image can also be picked with **Browse**, the
+desktop's own file picker, or by dropping the file on the window. Every way of picking it reads
+the file first and shows what it is: the format, the compression and its unpacked size, and the
+boot scheme. A file arxburn will not write says why, and Write stays off.
+
+Verify is the sha256 check on its own, for a
 file you already have: pick it, paste the sha256 from the project's download page, and it reads
 the whole file and tells you whether the two agree. It reports about 240 MB/s here, so a 4GB
 image takes around twenty seconds.
@@ -251,21 +288,33 @@ From a terminal, `sudo arxburn write ...` works with no polkit at all.
 
 The tool's promise is "the bytes on the stick are the bytes in the image", so the hash is the one
 part that must never be unavailable. SHA-256 is implemented here against the FIPS 180-4 vectors
-rather than pulled from a crate, and the only outside program it uses is curl (or wget) for
-downloads. It builds on a freshly installed machine with no network and an empty cargo cache, which
-is the machine someone reaches for a burn tool on.
+rather than pulled from a crate. The outside programs it uses are curl (or wget) for downloads,
+and the system's own xz, zstd, gzip or bzip2 for a compressed image, only when one is written.
+Their exit status is checked: it is the archive's verdict on its own checksums, so a damaged or
+truncated download is never called verified. It builds on a freshly installed machine with no
+network and an empty cargo cache, which is the machine someone reaches for a burn tool on.
 
 ## Tests
 
 ```sh
-cargo test
+cargo test                                          # 46 unit tests, nothing touches a device
+tests/run-in-vm.sh arxos-0.0.2-x86_64.iso           # the device cases, in a throwaway VM
 ```
 
-15 unit tests: the SHA-256 vectors and chunk-boundary agreement, the refusal rules, version-order
-resolution, checksum-file parsing and catalog overrides. The device path is exercised separately in
-a throwaway VM against real block devices: refusal without the flag leaves the disk untouched, a
-write verifies byte for byte, a single flipped byte makes verify fail, an oversized image is
-refused, and a mistyped confirmation writes nothing.
+The unit tests cover the SHA-256 vectors and chunk-boundary agreement, the refusal rules,
+recognising each format by content (with a real compress and decompress round trip), the local
+search, a write error ending the write with a reason instead of hanging, version-order
+resolution, checksum-file parsing and catalog overrides.
+
+The device cases never run on a real machine. `run-in-vm.sh` boots a live ISO in QEMU with a
+scratch USB stick and a scratch internal disk, and runs `tests/cases.sh` as root inside it. There
+are 19 cases, 25 checks: the internal disk is refused and left untouched; a write verifies byte for
+byte; one flipped byte fails verify; an oversized image and a mistyped confirmation write nothing;
+xz, zstd, gzip and bzip2 images are unpacked, written and verified; corrupt and truncated archives
+are rejected as damaged; a VM disk, a zip and a tarball are refused before anything is erased; an
+oversized compressed image is refused, or stops and says the device is full; `--expect` passes and
+fails as it should; the local search finds images by content and skips a disguised VM disk; and an
+image stored on the stick itself is refused and survives.
 
 ---
 
